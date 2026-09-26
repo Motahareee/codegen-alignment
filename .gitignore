@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.DS_Store
+checkpoints/
+
+outputs/
+wandb/
+data/
+*.safetensors
+*.bin
+*.pt

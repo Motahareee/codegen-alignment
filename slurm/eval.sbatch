@@ -1,24 +1,28 @@
 #!/bin/bash
-# Baseline / checkpoint evaluation. Adjust partition, account and env setup
-# to your cluster.
+# Baseline / checkpoint evaluation.
 #
 #   sbatch slurm/eval.sbatch Qwen/Qwen2.5-0.5B-Instruct --chat
 #   sbatch slurm/eval.sbatch Qwen/Qwen2.5-0.5B --n 10 --temperature 0.8
 #
 #SBATCH --job-name=codealign-eval
-#SBATCH --gres=gpu:1
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:a100:1        # needs bf16; older GPUs (T4, RTX 6000) lack it
 #SBATCH --cpus-per-task=16          # the sandbox runs tests in parallel on CPUs
 #SBATCH --mem=64G
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/%x-%j.out
 
-set -euo pipefail
+set -eo pipefail
 MODEL=$1; shift
 
-# --- environment: edit for your cluster ---
-# module load cuda/12.4
-source /opt/venv/bin/activate
-export HF_HOME=${HF_HOME:-$HOME/.cache/huggingface}
+# --- environment (TAMU Grace; edit for other clusters) ---
+module purge
+module load GCCcore/13.2.0 Python/3.11.5
+source $SCRATCH/envs/codealign/bin/activate
+export HF_HOME=${HF_HOME:-$SCRATCH/.cache/huggingface}   # never $HOME: 10k-file quota
+set -u  # only after module/activate, whose scripts reference unset variables
 
 cd "$SLURM_SUBMIT_DIR"
 python scripts/evaluate.py --model "$MODEL" "$@"

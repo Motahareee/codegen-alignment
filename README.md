@@ -37,6 +37,7 @@ train/
   dpo.py    TRL DPOTrainer on self-generated pairs
   grpo.py   TRL GRPOTrainer, reward = unit tests passed, optional difficulty filter
 slurm/
+  launch.sh        run on the login node: download assets, submit pipeline
   eval.sbatch      evaluate one model
   pipeline.sbatch  baselines -> SFT -> DPO -> GRPO, eval after each
 tests/          sandbox + parsing tests (pytest)
@@ -51,8 +52,8 @@ pytest
 
 # cluster (GPU)
 pip install -e ".[train,dev]"
-sbatch slurm/pipeline.sbatch                 # whole pipeline, ~3-5h on one A100-class GPU
-STAGES="dpo grpo" sbatch slurm/pipeline.sbatch   # rerun selected stages
+git pull && bash slurm/launch.sh             # on the login node: download, then submit the GPU job
+STAGES="dpo grpo" bash slurm/launch.sh       # rerun selected stages
 python scripts/summarize.py                  # results table
 ```
 

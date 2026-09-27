@@ -2,6 +2,7 @@
 # Full pipeline on one GPU: baselines -> SFT -> DPO -> GRPO, evaluating after each stage.
 # Every model is scored with the same eval (MBPP-sanitized test, greedy pass@1 + sampled pass@10).
 #
+# Usually submitted by slurm/launch.sh (which downloads models first). Directly:
 #   sbatch slurm/pipeline.sbatch                # everything
 #   STAGES="grpo" sbatch slurm/pipeline.sbatch  # just one stage (needs earlier outputs)
 #
@@ -31,6 +32,10 @@ mkdir -p logs data checkpoints outputs
 BASE=${BASE:-Qwen/Qwen2.5-0.5B}
 STAGES=${STAGES:-"baseline sft dpo grpo"}
 EVAL=outputs/eval
+
+echo "=== checks: GPU and sandbox ==="
+nvidia-smi --query-gpu=name,memory.total --format=csv
+pytest -q
 
 evaluate() {  # $1 = model path/id
     python scripts/evaluate.py --model "$1" --chat                            # greedy pass@1

@@ -56,6 +56,11 @@ _main()
 """
 
 
+# The interpreter itself needs these to start: module-built Pythons on HPC
+# clusters find libpython via LD_LIBRARY_PATH. Everything else is dropped.
+_PASSTHROUGH_ENV = ("PATH", "LD_LIBRARY_PATH")
+
+
 @dataclass
 class ExecResult:
     passed: int
@@ -89,19 +94,19 @@ def run_tests(
             [sys.executable, "-I", "-c", _HARNESS],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             cwd=tmp,
-            env={"PATH": "/usr/bin:/bin", "PYTHONHASHSEED": "0"},
+            env={**{k: os.environ[k] for k in _PASSTHROUGH_ENV if k in os.environ}, "PYTHONHASHSEED": "0"},
             start_new_session=True,  # own process group, so we can kill any children too
             text=True,
         )
         timed_out = False
         try:
-            stdout, _ = proc.communicate(payload, timeout=timeout)
+            stdout, stderr = proc.communicate(payload, timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
             os.killpg(proc.pid, signal.SIGKILL)
-            stdout, _ = proc.communicate()
+            stdout, stderr = proc.communicate()
 
     results = {}
     for line in stdout.splitlines():
@@ -116,7 +121,8 @@ def run_tests(
     if timed_out:
         return ExecResult(passed, len(tests), "timeout")
     if len(results) < len(tests):  # crashed mid-run (e.g. memory limit, os._exit)
-        return ExecResult(passed, len(tests), "error", "harness terminated early")
+        # stderr tail says why, e.g. a MemoryError, or the interpreter failing to start
+        return ExecResult(passed, len(tests), "error", "harness terminated early: " + stderr.strip()[-300:])
     return ExecResult(passed, len(tests), "ok" if passed == len(tests) else "fail")
 
 

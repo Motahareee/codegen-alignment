@@ -73,3 +73,10 @@ def test_pass_at_k():
     assert pass_at_k(10, 10, 1) == 1.0
     assert abs(pass_at_k(10, 3, 1) - 0.3) < 1e-9
     assert abs(pass_at_k(4, 1, 2) - 0.5) < 1e-9
+
+
+def test_interpreter_starts_with_sandbox_env():
+    # Regression: on clusters the module-built Python needs LD_LIBRARY_PATH to start.
+    # If the sandbox env strips it, every program "fails" and this shows why.
+    r = run_tests("x = 1", ["assert x == 1"])
+    assert r.all_passed, r.detail

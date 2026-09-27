@@ -22,6 +22,7 @@ module purge
 module load GCCcore/13.2.0 Python/3.11.5
 source $SCRATCH/envs/codealign/bin/activate
 export HF_HOME=${HF_HOME:-$SCRATCH/.cache/huggingface}   # never $HOME: 10k-file quota
+export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1   # compute nodes have no internet: pre-download on the login node
 set -u  # only after module/activate, whose scripts reference unset variables
 
 cd "$SLURM_SUBMIT_DIR"

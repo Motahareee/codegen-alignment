@@ -1,0 +1,21 @@
+[project]
+name = "codealign"
+version = "0.1.0"
+description = "Learning SFT, DPO, RLHF (PPO) and GRPO on code generation"
+requires-python = ">=3.10"
+dependencies = ["datasets", "numpy"]
+
+[project.optional-dependencies]
+# Heavy GPU stack: install on the cluster only.
+train = ["torch", "transformers", "accelerate", "peft", "trl", "vllm", "wandb"]
+dev = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

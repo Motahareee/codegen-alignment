@@ -9,3 +9,5 @@ data/
 *.safetensors
 *.bin
 *.pt
+logs/
+*.egg-info/

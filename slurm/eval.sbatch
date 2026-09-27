@@ -20,9 +20,14 @@ MODEL=$1; shift
 # --- environment (TAMU Grace; edit for other clusters) ---
 module purge
 module load GCCcore/13.2.0 Python/3.11.5
+module load CUDA/13.0.0 || echo "warning: CUDA module not loaded"   # nvcc, in case a kernel needs JIT compiling
 source $SCRATCH/envs/codealign/bin/activate
 export HF_HOME=${HF_HOME:-$SCRATCH/.cache/huggingface}   # never $HOME: 10k-file quota
 export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1   # compute nodes have no internet: pre-download on the login node
+export VLLM_CONFIG_ROOT=$SCRATCH/.config/vllm VLLM_CACHE_ROOT=$SCRATCH/.cache/vllm   # vLLM defaults to ~/.config (home quota)
+export VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1
+export VLLM_USE_FLASHINFER_SAMPLER=0   # its sampler JIT-compiles CUDA code; PyTorch's sampler is fine
+export XDG_CACHE_HOME=$SCRATCH/.cache TRITON_CACHE_DIR=$SCRATCH/.cache/triton   # JIT caches, not home
 set -u  # only after module/activate, whose scripts reference unset variables
 
 cd "$SLURM_SUBMIT_DIR"

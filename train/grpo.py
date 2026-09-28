@@ -61,7 +61,8 @@ def main():
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--max-completion-length", type=int, default=512)
     ap.add_argument("--epochs", type=float, default=5)
-    ap.add_argument("--lr", type=float, default=1e-6)
+    ap.add_argument("--lr", type=float, default=3e-6)  # 1e-6 for 70 steps left the reward flat
+    ap.add_argument("--temperature", type=float, default=0.8, help="1.0 drifted into garbage tokens")
     ap.add_argument("--beta", type=float, default=0.0, help="KL penalty to the reference model")
     ap.add_argument("--max-steps", type=int, default=-1)
     ap.add_argument("--vllm", action="store_true", help="generate with vLLM (colocated on the training GPU)")
@@ -75,7 +76,8 @@ def main():
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
         max_completion_length=args.max_completion_length,
-        temperature=1.0,
+        temperature=args.temperature,
+        mask_truncated_completions=True,  # completions cut off at max length are excluded from the loss
         beta=args.beta,
         num_train_epochs=args.epochs,
         max_steps=args.max_steps,

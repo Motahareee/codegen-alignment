@@ -5,6 +5,7 @@
 # Usually submitted by slurm/launch.sh (which downloads models first). Directly:
 #   sbatch slurm/pipeline.sbatch                # everything
 #   STAGES="grpo" sbatch slurm/pipeline.sbatch  # just one stage (needs earlier outputs)
+#   STAGES="sft_kodcode" SBATCH_TIMELIMIT=16:00:00 bash slurm/launch.sh   # large SFT (not in the default stages)
 #
 #SBATCH --job-name=codealign-pipeline
 #SBATCH --nodes=1
@@ -59,6 +60,15 @@ if run sft; then
     echo "=== SFT ==="
     python train/sft.py --model "$BASE" --out checkpoints/sft --report-to "$REPORT_TO"
     evaluate checkpoints/sft
+fi
+
+if run sft_kodcode; then
+    # SFT on MBPP train + ~480k KodCode problems (one epoch: several hours). Separate
+    # checkpoint, so it shows up as its own row next to the MBPP-only SFT.
+    echo "=== SFT (KodCode) ==="
+    python train/sft.py --model "$BASE" --data kodcode --epochs 1 --batch-size 16 \
+        --out checkpoints/sft_kodcode --report-to "$REPORT_TO"
+    evaluate checkpoints/sft_kodcode
 fi
 
 if run dpo || run grpo; then

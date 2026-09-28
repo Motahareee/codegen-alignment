@@ -4,30 +4,36 @@ The model sees (prompt -> ```python gold code```) pairs. Loss is computed only
 on the completion tokens (TRL's default for prompt/completion datasets).
 
   python train/sft.py --model Qwen/Qwen2.5-0.5B --out checkpoints/sft
+  python train/sft.py --data kodcode --epochs 1 --out checkpoints/sft_kodcode   # + 480k KodCode problems
 """
 
 import argparse
 
 import torch
-from datasets import Dataset
+from datasets import Dataset, concatenate_datasets
 from peft import LoraConfig
 from trl import SFTConfig, SFTTrainer
 
-from codealign.data import load_split
+from codealign.data import load_kodcode_sft, load_split
 
 
-def build_dataset() -> Dataset:
+def build_dataset(data: str, max_examples: int | None) -> Dataset:
     rows = []
     for p in load_split("train"):
         answer = f"```python\n{p.reference.strip()}\n```"
         rows.append({"prompt": p.messages(), "completion": [{"role": "assistant", "content": answer}]})
-    return Dataset.from_list(rows)
+    ds = Dataset.from_list(rows)
+    if data == "kodcode":
+        ds = concatenate_datasets([ds, load_kodcode_sft(max_examples)]).shuffle(seed=0)
+    return ds
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen2.5-0.5B")
     ap.add_argument("--out", default="checkpoints/sft")
+    ap.add_argument("--data", default="mbpp", choices=["mbpp", "kodcode"], help="kodcode = MBPP train + KodCode-V1")
+    ap.add_argument("--max-examples", type=int, help="cap on KodCode examples (default: all)")
     ap.add_argument("--epochs", type=float, default=3)
     ap.add_argument("--lr", type=float, default=1e-5)
     ap.add_argument("--batch-size", type=int, default=8)
@@ -51,12 +57,15 @@ def main():
         bf16=torch.cuda.is_available(),
         model_init_kwargs={"dtype": torch.bfloat16 if torch.cuda.is_available() else torch.float32},
         logging_steps=5,
-        save_strategy="no",
+        save_strategy="steps" if args.data == "kodcode" else "no",  # long run: keep a checkpoint in case of timeout
+        save_steps=2000,
+        save_total_limit=1,
+        dataset_num_proc=8,
         report_to=args.report_to,
     )
     peft_config = LoraConfig(r=16, lora_alpha=32, target_modules="all-linear", task_type="CAUSAL_LM") if args.lora else None
 
-    trainer = SFTTrainer(model=args.model, args=config, train_dataset=build_dataset(), peft_config=peft_config)
+    trainer = SFTTrainer(model=args.model, args=config, train_dataset=build_dataset(args.data, args.max_examples), peft_config=peft_config)
     trainer.train()
 
     # Save a plain merged model so evaluate.py / vLLM / later stages can load it directly.

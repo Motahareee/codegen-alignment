@@ -15,6 +15,14 @@ def test_partial_credit():
     assert r.status == "fail" and r.passed == 2 and r.frac == 2 / 3
 
 
+def test_errors_record_why_each_test_failed():
+    r = run_tests("def add(a, b):\n    return abs(a) + b", TESTS + ["assert sub(1, 1) == 0"])
+    assert r.errors[:3] == [None, None, "AssertionError: "]
+    assert r.errors[3] == "NameError: name 'sub' is not defined"
+    r = run_tests("import not_a_real_module", TESTS)
+    assert r.errors == ["ModuleNotFoundError: No module named 'not_a_real_module'"] * 3
+
+
 def test_syntax_error():
     r = run_tests("def add(a, b)\n    return a + b", TESTS)
     assert r.status == "error" and r.passed == 0

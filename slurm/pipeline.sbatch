@@ -7,6 +7,7 @@
 #   STAGES="grpo" sbatch slurm/pipeline.sbatch  # just one stage (needs earlier outputs)
 #   STAGES="sft_kodcode" SBATCH_TIMELIMIT=16:00:00 bash slurm/launch.sh   # large SFT (not in the default stages)
 #   STAGES="dpo grpo" SFT_CKPT=checkpoints/sft_kodcode bash slurm/launch.sh # DPO/GRPO on top of it
+#   STAGES="analyze" bash slurm/launch.sh      # beyond-pass@k report -> outputs/analysis.md
 #
 #SBATCH --job-name=codealign-pipeline
 #SBATCH --nodes=1
@@ -100,6 +101,13 @@ if run grpo; then
     python train/grpo.py --model "$SFT_CKPT" --out checkpoints/grpo$SUFFIX --vllm \
         --filter-samples "$SAMPLES" --report-to "$REPORT_TO"
     evaluate checkpoints/grpo$SUFFIX
+fi
+
+if run analyze; then
+    # Beyond pass@k: new ability vs. sharpening, reward hacking, hallucination, diversity.
+    # CPU only (re-runs the saved eval samples), but it executes model code, so it runs in a job.
+    echo "=== analysis ==="
+    python scripts/analyze.py --eval-dir $EVAL --out outputs/analysis.md
 fi
 
 python scripts/summarize.py $EVAL

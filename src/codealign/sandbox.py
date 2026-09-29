@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # The harness receives the nonce and the payload on stdin, then execs the
 # model's code in its own globals dict. Tests run one by one; each result is
@@ -49,7 +49,7 @@ def _main():
             exec(test, g)
             ok, err = True, None
         except BaseException as e:
-            ok, err = False, type(e).__name__
+            ok, err = False, (type(e).__name__ + ": " + str(e))[:200]
         out.write(nonce + json.dumps({"test": i, "ok": ok, "err": err}) + "\n")
         out.flush()
 _main()
@@ -67,6 +67,7 @@ class ExecResult:
     total: int
     status: str  # "ok" | "fail" | "error" | "timeout"
     detail: str = ""
+    errors: list = field(default_factory=list)  # per test: None if passed, else "ExceptionName: message"
 
     @property
     def all_passed(self) -> bool:
@@ -108,22 +109,25 @@ def run_tests(
             os.killpg(proc.pid, signal.SIGKILL)
             stdout, stderr = proc.communicate()
 
-    results = {}
+    results, errs = {}, {}
     for line in stdout.splitlines():
         if not line.startswith(nonce):
             continue
         msg = json.loads(line[len(nonce):])
         if "compile_error" in msg:
-            return ExecResult(0, len(tests), "error", msg["compile_error"])
+            return ExecResult(0, len(tests), "error", msg["compile_error"], [msg["compile_error"]] * len(tests))
         results[msg["test"]] = msg["ok"]
+        errs[msg["test"]] = msg["err"]
 
     passed = sum(results.values())
+    missing = "Timeout" if timed_out else "Crash"
+    errors = [errs[i] if i in errs else missing for i in range(len(tests))]
     if timed_out:
-        return ExecResult(passed, len(tests), "timeout")
+        return ExecResult(passed, len(tests), "timeout", errors=errors)
     if len(results) < len(tests):  # crashed mid-run (e.g. memory limit, os._exit)
         # stderr tail says why, e.g. a MemoryError, or the interpreter failing to start
-        return ExecResult(passed, len(tests), "error", "harness terminated early: " + stderr.strip()[-300:])
-    return ExecResult(passed, len(tests), "ok" if passed == len(tests) else "fail")
+        return ExecResult(passed, len(tests), "error", "harness terminated early: " + stderr.strip()[-300:], errors)
+    return ExecResult(passed, len(tests), "ok" if passed == len(tests) else "fail", errors=errors)
 
 
 def run_many(jobs: list[dict], workers: int | None = None, **kwargs) -> list[ExecResult]:

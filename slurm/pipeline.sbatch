@@ -6,6 +6,7 @@
 #   sbatch slurm/pipeline.sbatch                # everything
 #   STAGES="grpo" sbatch slurm/pipeline.sbatch  # just one stage (needs earlier outputs)
 #   STAGES="sft_kodcode" SBATCH_TIMELIMIT=16:00:00 bash slurm/launch.sh   # large SFT (not in the default stages)
+#   STAGES="dpo grpo" SFT_CKPT=checkpoints/sft_kodcode bash slurm/launch.sh # DPO/GRPO on top of it
 #
 #SBATCH --job-name=codealign-pipeline
 #SBATCH --nodes=1
@@ -71,26 +72,34 @@ if run sft_kodcode; then
     evaluate checkpoints/sft_kodcode
 fi
 
+# DPO and GRPO start from SFT_CKPT. Outputs are suffixed by its name, so e.g.
+# SFT_CKPT=checkpoints/sft_kodcode writes checkpoints/dpo_kodcode, grpo_kodcode.
+SFT_CKPT=${SFT_CKPT:-checkpoints/sft}
+SFT_NAME=$(basename "$SFT_CKPT")
+SUFFIX=${SFT_NAME#sft}                          # "" for sft, "_kodcode" for sft_kodcode
+SAMPLES=$EVAL/${SFT_NAME}_train_n8_t1.0/samples.jsonl   # evaluate.py names runs after the model dir
+PAIRS=data/dpo_pairs$SUFFIX.jsonl
+
 if run dpo || run grpo; then
     # Sample 8 solutions per train problem from the SFT model. Used for DPO pairs
     # and for GRPO's difficulty filter.
-    if [[ ! -f $EVAL/sft_train_n8_t1.0/samples.jsonl ]]; then
-        python scripts/evaluate.py --model checkpoints/sft --chat --split train --n 8 --temperature 1.0
+    if [[ ! -f $SAMPLES ]]; then
+        python scripts/evaluate.py --model "$SFT_CKPT" --chat --split train --n 8 --temperature 1.0
     fi
 fi
 
 if run dpo; then
-    echo "=== DPO ==="
-    python scripts/make_dpo_pairs.py $EVAL/sft_train_n8_t1.0/samples.jsonl --out data/dpo_pairs.jsonl
-    python train/dpo.py --model checkpoints/sft --pairs data/dpo_pairs.jsonl --out checkpoints/dpo --report-to "$REPORT_TO"
-    evaluate checkpoints/dpo
+    echo "=== DPO (from $SFT_CKPT) ==="
+    python scripts/make_dpo_pairs.py "$SAMPLES" --out "$PAIRS"
+    python train/dpo.py --model "$SFT_CKPT" --pairs "$PAIRS" --out checkpoints/dpo$SUFFIX --report-to "$REPORT_TO"
+    evaluate checkpoints/dpo$SUFFIX
 fi
 
 if run grpo; then
-    echo "=== GRPO ==="
-    python train/grpo.py --model checkpoints/sft --out checkpoints/grpo --vllm \
-        --filter-samples $EVAL/sft_train_n8_t1.0/samples.jsonl --report-to "$REPORT_TO"
-    evaluate checkpoints/grpo
+    echo "=== GRPO (from $SFT_CKPT) ==="
+    python train/grpo.py --model "$SFT_CKPT" --out checkpoints/grpo$SUFFIX --vllm \
+        --filter-samples "$SAMPLES" --report-to "$REPORT_TO"
+    evaluate checkpoints/grpo$SUFFIX
 fi
 
 python scripts/summarize.py $EVAL

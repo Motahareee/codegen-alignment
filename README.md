@@ -54,6 +54,7 @@ DPO/GRPO rows are from the second run (2026-09-28); the first run's settings did
 
 - [ ] **Large SFT**: stage `sft_kodcode` = MBPP train + ~475k KodCode-V1 problems (decontaminated), running now.
 - [ ] **DPO/GRPO on top of the KodCode SFT model**: does RL still help once SFT is much stronger?
+- [ ] **DPO pairing**: try all pass × fail combinations (or a higher cap) instead of one-to-one pairs; ~3–4× more pairs.
 - [ ] **Sampling quality**: the model still rambles past its answer; try a small penalty for completions that hit the length limit.
 - [ ] RLHF with a learned reward model (roadmap step 3).
 - [ ] From-scratch loss implementations.
@@ -113,6 +114,9 @@ Every training script takes `--max-steps N` and `--lora` for quick local smoke t
 - [x] **0b. Baselines**: base and instruct models, greedy pass@1 and sampled pass@10
 - [x] **1. SFT** (TRL `SFTTrainer` on the base model): 11% → 42% greedy pass@1
 - [x] **2. DPO**: sample 8 solutions per train problem, pair passing vs. failing, TRL `DPOTrainer`: sampled pass@1 21% → 27%
+      Pairing: passing and failing samples are shuffled and matched one-to-one, at most 4 pairs per problem
+      (3 pass / 5 fail → 3 pairs, not all 15 combinations). This avoids reusing the same answer in many pairs
+      and keeps problems with a lucky split from dominating; all-pairs is a valid alternative worth trying.
 - [ ] **3. RLHF**: reward model on those pairs + RL against it (TRL 1.x dropped `PPOTrainer`; use `RLOOTrainer`/`GRPOTrainer` with the RM); compare the RM score with the true pass rate (reward hacking)
 - [x] **4. GRPO**: test pass rate as reward; filter to problems with 0 < pass rate < 1: sampled pass@1 21% → 26%
 - [~] **5. Compare**: `scripts/summarize.py` table above; PPO/RLHF row still missing

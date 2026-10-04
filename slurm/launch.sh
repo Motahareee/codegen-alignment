@@ -16,7 +16,8 @@ source $SCRATCH/envs/codealign/bin/activate
 set -u
 
 echo "== downloading models and datasets =="
-python scripts/download_assets.py
+BASE=${BASE:-Qwen/Qwen2.5-0.5B}   # same default as pipeline.sbatch
+python scripts/download_assets.py --models "$BASE" "$BASE-Instruct"
 
 echo "== submitting GPU job =="
 mkdir -p logs   # SLURM needs the log directory to exist before the job starts

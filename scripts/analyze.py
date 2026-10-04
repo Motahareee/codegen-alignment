@@ -26,14 +26,36 @@ from codealign.data import extract_code, load_split
 from codealign.metrics import pass_at_k
 from codealign.sandbox import run_many
 
-# model dir name -> the model it was trained from (for gained/lost problems)
-PARENT = {
-    "sft": "Qwen2.5-0.5B", "sft_kodcode": "Qwen2.5-0.5B",
-    "dpo": "sft", "grpo": "sft",
-    "dpo_kodcode": "sft_kodcode", "grpo_kodcode": "sft_kodcode",
-}
-ORDER = ["Qwen2.5-0.5B", "Qwen2.5-0.5B-Instruct", "sft", "dpo", "grpo",
-         "sft_kodcode", "dpo_kodcode", "grpo_kodcode"]
+# Display order within one model size; the base and Instruct models come first.
+ORDER = ["sft", "dpo", "grpo", "sft_kodcode", "dpo_kodcode", "grpo_kodcode", "kd_seq_kodcode", "kd_onpolicy_kodcode"]
+
+
+def split_size(name: str) -> tuple[str, str]:
+    """'grpo_kodcode_1.5b' -> ('grpo_kodcode', '1.5B'); 'Qwen2.5-1.5B-Instruct' -> (..., '1.5B'); untagged = 0.5B."""
+    m = re.search(r"-(\d+(?:\.\d+)?B)\b", name) or re.search(r"_(\d+(?:\.\d+)?)b$", name)
+    if not m:
+        return name, "0.5B"
+    return (name if name.startswith("Qwen") else name[: m.start()]), m.group(1).upper().rstrip("B") + "B"
+
+
+def parent(name: str) -> str | None:
+    """The model this one was trained from, for gained/lost problems."""
+    core, size = split_size(name)
+    tag = "" if size == "0.5B" else "_" + size.lower()
+    if core in ("sft", "sft_kodcode"):
+        return f"Qwen2.5-{size}"
+    m = re.fullmatch(r"(?:dpo|grpo|kd_seq|kd_onpolicy)(_\w+)?", core)
+    return f"sft{m.group(1) or ''}{tag}" if m else None
+
+
+def sort_key(name: str):
+    core, size = split_size(name)
+    if name.startswith("Qwen"):
+        rank = 1 if name.endswith("Instruct") else 0
+    else:
+        rank = 2 + ORDER.index(core) if core in ORDER else 99
+    return float(size[:-1]), rank, name
+
 
 # Failures that mean the code used something that doesn't exist. A NameError for the
 # function the test calls is counted separately: that's a misnamed solution, not an invented API.
@@ -126,7 +148,8 @@ def main():
     eval_dir = Path(args.eval_dir)
     problems = load_split("eval")
 
-    found = [m for m in ORDER if load(eval_dir, m, "n10_t0.8")]
+    found = sorted((d.name.removesuffix("_eval_n10_t0.8") for d in eval_dir.glob("*_eval_n10_t0.8")
+                    if (d / "samples.jsonl").exists()), key=sort_key)
     data = {}
     for m in found:
         print(f"re-running samples of {m} ...", flush=True)
@@ -143,7 +166,7 @@ def main():
     for m in found:
         correct = data[m][0]
         ks = [np.mean([pass_at_k(10, c, k) for c in correct]) for k in (1, 2, 5, 10)]
-        par = PARENT.get(m)
+        par = parent(m)
         if par in data:
             mine = {i for i, c in enumerate(correct) if c}
             theirs = {i for i, c in enumerate(data[par][0]) if c}

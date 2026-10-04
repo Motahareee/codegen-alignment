@@ -5,12 +5,15 @@ Splits:
   - eval:  MBPP "sanitized" test (257 problems, task_ids 11-510)
 They don't overlap, so we never train on eval problems.
 
-Extra SFT data: KodCode-V1 (484k synthetic Python problems with verified
-solutions); see load_kodcode_sft().
+Extra data: KodCode-V1 (484k synthetic Python problems with verified
+solutions and pytest tests). load_kodcode_sft() gives SFT rows;
+load_kodcode_problems() gives Problems with tests our sandbox can run
+(prompts for distillation, and for checking teacher answers).
 """
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 
@@ -29,9 +32,12 @@ class Problem:
     tests: list[str]
     setup: str  # imports / setup code the tests need
     reference: str  # gold solution (used for SFT targets)
+    custom_prompt: str = ""  # KodCode problems bring their own prompt
 
     @property
     def prompt(self) -> str:
+        if self.custom_prompt:
+            return self.custom_prompt
         # Showing one test tells the model the expected function name and signature.
         return (
             f"{self.description}\n"
@@ -83,8 +89,8 @@ def _ngrams(text: str, n: int) -> set[tuple[str, ...]]:
     return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
 
 
-def load_kodcode_sft(max_examples: int | None = None, ngram: int = 8, num_proc: int = 8):
-    """KodCode-V1 train split as SFT rows: {"prompt": messages, "completion": messages}.
+def _load_kodcode(max_examples: int | None, seed: int, ngram: int = 8, num_proc: int = 8):
+    """KodCode-V1 train split, decontaminated against MBPP eval.
 
     KodCode's authors already moved benchmark look-alikes to a separate
     "use_with_caution" split, which we don't use. On top of that we drop any
@@ -92,7 +98,7 @@ def load_kodcode_sft(max_examples: int | None = None, ngram: int = 8, num_proc: 
     """
     eval_grams = set().union(*(_ngrams(p.description, ngram) for p in load_split("eval")))
     ds = load_dataset(KODCODE, split="train")
-    ds = ds.select_columns(["question", "solution", "test_info"])
+    ds = ds.select_columns(["question_id", "question", "solution", "test", "test_info"])
     n_all = len(ds)
 
     def keep(ex) -> bool:
@@ -103,21 +109,77 @@ def load_kodcode_sft(max_examples: int | None = None, ngram: int = 8, num_proc: 
     ds = ds.filter(keep, num_proc=num_proc)
     print(f"KodCode: kept {len(ds)}/{n_all} (dropped long or eval-overlapping questions)")
     if max_examples and max_examples < len(ds):
-        ds = ds.shuffle(seed=0).select(range(max_examples))
+        ds = ds.shuffle(seed=seed).select(range(max_examples))
+    return ds
+
+
+def _kodcode_prompt(ex) -> str:
+    prompt = ex["question"].strip()
+    decls = [t["function_declaration"] for t in ex["test_info"] or [] if t["function_declaration"]]
+    if decls:  # like MBPP's example test, this tells the model the expected function name
+        prompt += "\nUse this function signature:\n" + "\n".join(decls)
+    return prompt + "\nWrite the complete solution in a single ```python code block."
+
+
+def load_kodcode_sft(max_examples: int | None = None, num_proc: int = 8):
+    """KodCode-V1 train split as SFT rows: {"prompt": messages, "completion": messages}."""
+    ds = _load_kodcode(max_examples, seed=0, num_proc=num_proc)
 
     def to_messages(ex) -> dict:
-        prompt = ex["question"].strip()
-        decls = [t["function_declaration"] for t in ex["test_info"] or [] if t["function_declaration"]]
-        if decls:  # like MBPP's example test, this tells the model the expected function name
-            prompt += "\nUse this function signature:\n" + "\n".join(decls)
-        prompt += "\nWrite the complete solution in a single ```python code block."
         answer = f"```python\n{ex['solution'].strip()}\n```"
         return {
-            "prompt": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+            "prompt": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": _kodcode_prompt(ex)}],
             "completion": [{"role": "assistant", "content": answer}],
         }
 
     return ds.map(to_messages, remove_columns=ds.column_names, num_proc=num_proc)
+
+
+_SOLUTION_IMPORT = re.compile(r"^\s*from\s+solution\s+import\s+(\([^)]*\)|.*)$", re.MULTILINE)
+
+
+def kodcode_tests(test_code: str) -> list[str] | None:
+    """Turn a KodCode pytest file into sandbox tests: [module, "test_a()", "test_b()", ...].
+
+    The solution's functions are already in the sandbox globals, so the
+    `from solution import ...` line is dropped. The module goes in the tests
+    (run after the model's code), not in setup, so model code can't redefine
+    the test functions. Only zero-argument test functions are kept: fixtures
+    and parametrize need pytest itself. Returns None if nothing usable is left.
+    """
+    code = _SOLUTION_IMPORT.sub("", test_code)
+    if re.search(r"\bsolution\b", code):  # e.g. `import solution` / `solution.f()`
+        return None
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    names = [
+        n.name for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name.startswith("test")
+        and not n.args.args and not n.decorator_list
+    ]
+    return [code] + [f"{name}()" for name in names] if names else None
+
+
+def load_kodcode_problems(n: int | None = None, seed: int = 1, num_proc: int = 8) -> list[Problem]:
+    """n KodCode problems (a different shuffle from SFT's) with sandbox-runnable tests.
+
+    tests[0] is the test module itself, so pass counts include it; use
+    all_passed, not frac. Problems whose tests can't be converted are skipped.
+    """
+    ds = _load_kodcode(None, seed=seed, num_proc=num_proc).shuffle(seed=seed)
+    problems = []
+    for ex in ds:
+        tests = kodcode_tests(ex["test"])
+        if tests:
+            problems.append(Problem(
+                task_id=f"kodcode/{ex['question_id']}", description=ex["question"], tests=tests,
+                setup="", reference=ex["solution"], custom_prompt=_kodcode_prompt(ex),
+            ))
+            if n and len(problems) >= n:
+                break
+    return problems
 
 
 _FENCE = re.compile(r"```(?:python|py)?[ \t]*\n(.*?)```", re.DOTALL)

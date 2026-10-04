@@ -88,3 +88,40 @@ def test_interpreter_starts_with_sandbox_env():
     # If the sandbox env strips it, every program "fails" and this shows why.
     r = run_tests("x = 1", ["assert x == 1"])
     assert r.all_passed, r.detail
+
+
+KODCODE_TEST = """from solution import add
+
+import pytest
+
+def test_small():
+    assert add(1, 2) == 3
+
+def test_zero():
+    assert add(0, 0) == 0
+
+@pytest.mark.parametrize("a", [1, 2])
+def test_param(a):
+    assert add(a, 0) == a
+
+def test_fixture(tmp_path):
+    assert tmp_path
+"""
+
+
+def test_kodcode_tests_convert_to_sandbox_tests():
+    from codealign.data import kodcode_tests
+
+    tests = kodcode_tests(KODCODE_TEST)
+    assert "from solution" not in tests[0]
+    assert tests[1:] == ["test_small()", "test_zero()"]  # parametrize/fixture tests need pytest: dropped
+    assert run_tests("def add(a, b):\n    return a + b", tests).all_passed
+    assert not run_tests("def add(a, b):\n    return a - b", tests).all_passed
+    assert kodcode_tests("import solution\n\ndef test_a():\n    assert solution.f()") is None
+
+
+def test_kodcode_tests_cannot_be_redefined_by_the_model():
+    from codealign.data import kodcode_tests
+
+    cheat = "def add(a, b):\n    return 0\ndef test_small(): pass\ndef test_zero(): pass"
+    assert not run_tests(cheat, kodcode_tests(KODCODE_TEST)).all_passed

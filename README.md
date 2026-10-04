@@ -52,8 +52,11 @@ DPO/GRPO rows are from the second run (2026-09-28); the first run's settings did
 
 ## Next steps
 
-- [ ] **Large SFT**: stage `sft_kodcode` = MBPP train + ~475k KodCode-V1 problems (decontaminated), running now.
-- [ ] **DPO/GRPO on top of the KodCode SFT model**: does RL still help once SFT is much stronger?
+- [x] **Large SFT**: stage `sft_kodcode` = MBPP train + ~440k KodCode-V1 problems (decontaminated).
+- [x] **DPO/GRPO on top of the KodCode SFT model**: does RL still help once SFT is much stronger?
+- [ ] **Distillation**: train a 1.5B teacher (KodCode SFT → GRPO), then distill it into the 0.5B KodCode student
+      two ways, compared with GRPO from the same student: SFT on the teacher's test-passing answers (`kd_seq`),
+      and on-policy distillation, where the student matches the teacher's token probabilities on its own answers (`kd_onpolicy`).
 - [ ] **DPO pairing**: try all pass × fail combinations (or a higher cap) instead of one-to-one pairs; ~3–4× more pairs.
 - [ ] **Sampling quality**: the model still rambles past its answer; try a small penalty for completions that hit the length limit.
 - [ ] RLHF with a learned reward model (roadmap step 3).
@@ -71,15 +74,18 @@ scripts/
   evaluate.py          sample -> execute -> pass@k  (vLLM, or --backend hf on CPU)
   check_references.py  sanity check that gold solutions pass
   make_dpo_pairs.py    model's own samples -> (passing, failing) preference pairs
+  make_distill_data.py teacher's test-passing answers -> SFT rows (sequence-level distillation)
+  analyze.py           beyond pass@k: new ability vs sharpening, reward hacking, hallucination, diversity
   summarize.py         all eval results -> one comparison table
 train/
   sft.py    TRL SFTTrainer on gold solutions (completion-only loss)
   dpo.py    TRL DPOTrainer on self-generated pairs
   grpo.py   TRL GRPOTrainer, reward = unit tests passed, optional difficulty filter
+  distill.py  TRL DistillationTrainer: on-policy distillation from a bigger teacher
 slurm/
   launch.sh        run on the login node: download assets, submit pipeline
   eval.sbatch      evaluate one model
-  pipeline.sbatch  baselines -> SFT -> DPO -> GRPO, eval after each
+  pipeline.sbatch  baselines -> SFT -> DPO -> GRPO -> distillation -> analysis, eval after each
 tests/          sandbox + parsing tests (pytest)
 ```
 
@@ -120,4 +126,5 @@ Every training script takes `--max-steps N` and `--lora` for quick local smoke t
 - [ ] **3. RLHF**: reward model on those pairs + RL against it (TRL 1.x dropped `PPOTrainer`; use `RLOOTrainer`/`GRPOTrainer` with the RM); compare the RM score with the true pass rate (reward hacking)
 - [x] **4. GRPO**: test pass rate as reward; filter to problems with 0 < pass rate < 1: sampled pass@1 21% → 26%
 - [~] **5. Compare**: `scripts/summarize.py` table above; PPO/RLHF row still missing
+- [ ] **6. Distillation**: 1.5B teacher → 0.5B student, sequence-level vs on-policy, vs GRPO
 - [ ] **From scratch**: the SFT (masked), DPO and GRPO losses on a tiny example

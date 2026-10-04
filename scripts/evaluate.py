@@ -9,6 +9,9 @@ Examples:
 
   # base model, 10 samples per problem for pass@1 and pass@10
   python scripts/evaluate.py --model Qwen/Qwen2.5-0.5B --n 10 --temperature 0.8
+
+  # teacher answers on 20k KodCode problems, checked against their tests (distillation data)
+  python scripts/evaluate.py --model checkpoints/grpo_kodcode_1.5b --chat --split kodcode --limit 20000 --n 4 --temperature 0.7
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from codealign.data import extract_code, load_split
+from codealign.data import extract_code, load_kodcode_problems, load_split
 from codealign.metrics import pass_at_k
 from codealign.sandbox import run_many
 
@@ -62,7 +65,8 @@ def generate_hf(model, prompts, chat, n, temperature, max_tokens, seed):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
-    ap.add_argument("--split", default="eval", choices=["train", "eval"])
+    ap.add_argument("--split", default="eval", choices=["train", "eval", "kodcode"],
+                    help="kodcode = KodCode problems with converted tests (use --limit; not an eval set)")
     ap.add_argument("--chat", action="store_true", help="use the tokenizer's chat template")
     ap.add_argument("--n", type=int, default=1, help="samples per problem")
     ap.add_argument("--temperature", type=float, default=0.0)
@@ -73,7 +77,10 @@ def main():
     ap.add_argument("--out", default="outputs/eval")
     args = ap.parse_args()
 
-    problems = load_split(args.split)[: args.limit]
+    if args.split == "kodcode":
+        problems = load_kodcode_problems(args.limit)
+    else:
+        problems = load_split(args.split)[: args.limit]
     prompts = [p.messages() if args.chat else BASE_TEMPLATE.format(prompt=p.prompt) for p in problems]
 
     t0 = time.time()

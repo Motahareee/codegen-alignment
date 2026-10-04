@@ -9,6 +9,13 @@
 #   STAGES="dpo grpo" SFT_CKPT=checkpoints/sft_kodcode bash slurm/launch.sh # DPO/GRPO on top of it
 #   STAGES="analyze" bash slurm/launch.sh      # beyond-pass@k report -> outputs/analysis.md
 #
+# A bigger base model: its checkpoints get a size tag (sft_kodcode_1.5b, grpo_kodcode_1.5b, ...)
+#   BASE=Qwen/Qwen2.5-1.5B STAGES="baseline sft_kodcode grpo" SFT_CKPT=checkpoints/sft_kodcode_1.5b \
+#     SFT_ARGS="--batch-size 8 --grad-accum 4" SBATCH_TIMELIMIT=2-00:00:00 bash slurm/launch.sh
+# Distillation into the 0.5B KodCode student (defaults: TEACHER=checkpoints/grpo_kodcode_1.5b,
+# STUDENT=checkpoints/sft_kodcode):
+#   STAGES="kd_seq kd_onpolicy" bash slurm/launch.sh
+#
 #SBATCH --job-name=codealign-pipeline
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -38,6 +45,8 @@ REPORT_TO=${REPORT_TO:-none}        # set REPORT_TO=wandb to get training curves
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs data checkpoints outputs
 BASE=${BASE:-Qwen/Qwen2.5-0.5B}
+SIZE=$(basename "$BASE"); SIZE=${SIZE##*-}      # Qwen/Qwen2.5-1.5B -> 1.5B
+TAG=$([[ $SIZE == 0.5B ]] && echo "" || echo "_${SIZE,,}")   # "" for 0.5B, "_1.5b" for 1.5B
 STAGES=${STAGES:-"baseline sft dpo grpo"}
 EVAL=outputs/eval
 
@@ -55,29 +64,30 @@ run() { [[ " $STAGES " == *" $1 "* ]]; }
 if run baseline; then
     echo "=== baselines ==="
     evaluate "$BASE"
-    evaluate Qwen/Qwen2.5-0.5B-Instruct   # reference point: a model post-trained by Qwen
+    evaluate "$BASE-Instruct"   # reference point: a model post-trained by Qwen
 fi
 
 if run sft; then
     echo "=== SFT ==="
-    python train/sft.py --model "$BASE" --out checkpoints/sft --report-to "$REPORT_TO"
-    evaluate checkpoints/sft
+    python train/sft.py --model "$BASE" --out checkpoints/sft$TAG --report-to "$REPORT_TO"
+    evaluate checkpoints/sft$TAG
 fi
 
 if run sft_kodcode; then
     # SFT on MBPP train + ~480k KodCode problems (one epoch: several hours). Separate
     # checkpoint, so it shows up as its own row next to the MBPP-only SFT.
-    echo "=== SFT (KodCode) ==="
-    python train/sft.py --model "$BASE" --data kodcode --epochs 1 --batch-size 16 \
-        --out checkpoints/sft_kodcode --report-to "$REPORT_TO"
-    evaluate checkpoints/sft_kodcode
+    # SFT_ARGS: extra flags, e.g. a smaller batch for bigger models; KODCODE_MAX caps the examples.
+    echo "=== SFT (KodCode, $BASE) ==="
+    python train/sft.py --model "$BASE" --data kodcode --epochs 1 ${SFT_ARGS:---batch-size 16} \
+        ${KODCODE_MAX:+--max-examples $KODCODE_MAX} --out checkpoints/sft_kodcode$TAG --report-to "$REPORT_TO"
+    evaluate checkpoints/sft_kodcode$TAG
 fi
 
 # DPO and GRPO start from SFT_CKPT. Outputs are suffixed by its name, so e.g.
 # SFT_CKPT=checkpoints/sft_kodcode writes checkpoints/dpo_kodcode, grpo_kodcode.
-SFT_CKPT=${SFT_CKPT:-checkpoints/sft}
+SFT_CKPT=${SFT_CKPT:-checkpoints/sft$TAG}
 SFT_NAME=$(basename "$SFT_CKPT")
-SUFFIX=${SFT_NAME#sft}                          # "" for sft, "_kodcode" for sft_kodcode
+SUFFIX=${SFT_NAME#sft}                          # "" for sft, "_kodcode" for sft_kodcode, "_kodcode_1.5b" ...
 SAMPLES=$EVAL/${SFT_NAME}_train_n8_t1.0/samples.jsonl   # evaluate.py names runs after the model dir
 PAIRS=data/dpo_pairs$SUFFIX.jsonl
 
@@ -101,6 +111,34 @@ if run grpo; then
     python train/grpo.py --model "$SFT_CKPT" --out checkpoints/grpo$SUFFIX --vllm \
         --filter-samples "$SAMPLES" --report-to "$REPORT_TO"
     evaluate checkpoints/grpo$SUFFIX
+fi
+
+# Distillation: a bigger TEACHER into a small STUDENT, compared with GRPO from the same student.
+#   kd_seq:      SFT on the teacher's own answers to KodCode problems that pass the tests
+#   kd_onpolicy: the student writes answers; the teacher's token probabilities on them are the target
+TEACHER=${TEACHER:-checkpoints/grpo_kodcode_1.5b}
+STUDENT=${STUDENT:-checkpoints/sft_kodcode}
+STUDENT_NAME=$(basename "$STUDENT")
+KD_SUFFIX=${STUDENT_NAME#sft}                   # sft_kodcode -> kd_seq_kodcode, kd_onpolicy_kodcode
+KD_PROBLEMS=${KD_PROBLEMS:-20000}
+
+if run kd_seq; then
+    echo "=== distillation: SFT on $TEACHER's answers -> $STUDENT ==="
+    TEACHER_SAMPLES=$EVAL/$(basename "$TEACHER")_kodcode_n4_t0.7/samples.jsonl
+    if [[ ! -f $TEACHER_SAMPLES ]]; then
+        python scripts/evaluate.py --model "$TEACHER" --chat --split kodcode --limit "$KD_PROBLEMS" --n 4 --temperature 0.7
+    fi
+    KD_DATA=data/kd_seq_$(basename "$TEACHER").jsonl
+    python scripts/make_distill_data.py "$TEACHER_SAMPLES" --out "$KD_DATA"
+    python train/sft.py --model "$STUDENT" --data "$KD_DATA" --epochs 1 --out checkpoints/kd_seq$KD_SUFFIX --report-to "$REPORT_TO"
+    evaluate checkpoints/kd_seq$KD_SUFFIX
+fi
+
+if run kd_onpolicy; then
+    echo "=== distillation: on-policy, $TEACHER -> $STUDENT ==="
+    python train/distill.py --model "$STUDENT" --teacher "$TEACHER" --n-kodcode "$KD_PROBLEMS" \
+        --out checkpoints/kd_onpolicy$KD_SUFFIX --vllm --report-to "$REPORT_TO"
+    evaluate checkpoints/kd_onpolicy$KD_SUFFIX
 fi
 
 if run analyze; then

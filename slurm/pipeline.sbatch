@@ -50,7 +50,17 @@ TAG=$([[ $SIZE == 0.5B ]] && echo "" || echo "_${SIZE,,}")   # "" for 0.5B, "_1.
 STAGES=${STAGES:-"baseline sft dpo grpo"}
 EVAL=outputs/eval
 
-echo "=== checks: GPU and sandbox ==="
+# Each stage prints a header; when the next one starts, the previous one's duration is printed.
+stage() {
+    if [[ -n ${STAGE_NAME:-} ]]; then
+        local t=$((SECONDS - STAGE_START))
+        printf -- "--- %s took %dh%02dm\n" "$STAGE_NAME" $((t / 3600)) $((t % 3600 / 60))
+    fi
+    STAGE_NAME=$1 STAGE_START=$SECONDS
+    [[ $1 == done ]] || echo "=== $1 === ($(date '+%F %H:%M'))"
+}
+
+stage "checks: GPU and sandbox"
 nvidia-smi --query-gpu=name,memory.total --format=csv
 pytest -q
 
@@ -62,13 +72,13 @@ evaluate() {  # $1 = model path/id
 run() { [[ " $STAGES " == *" $1 "* ]]; }
 
 if run baseline; then
-    echo "=== baselines ==="
+    stage "baselines"
     evaluate "$BASE"
     evaluate "$BASE-Instruct"   # reference point: a model post-trained by Qwen
 fi
 
 if run sft; then
-    echo "=== SFT ==="
+    stage "SFT"
     python train/sft.py --model "$BASE" --out checkpoints/sft$TAG --report-to "$REPORT_TO"
     evaluate checkpoints/sft$TAG
 fi
@@ -77,7 +87,7 @@ if run sft_kodcode; then
     # SFT on MBPP train + ~480k KodCode problems (one epoch: several hours). Separate
     # checkpoint, so it shows up as its own row next to the MBPP-only SFT.
     # SFT_ARGS: extra flags, e.g. a smaller batch for bigger models; KODCODE_MAX caps the examples.
-    echo "=== SFT (KodCode, $BASE) ==="
+    stage "SFT (KodCode, $BASE)"
     python train/sft.py --model "$BASE" --data kodcode --epochs 1 ${SFT_ARGS:---batch-size 16} \
         ${KODCODE_MAX:+--max-examples $KODCODE_MAX} --out checkpoints/sft_kodcode$TAG --report-to "$REPORT_TO"
     evaluate checkpoints/sft_kodcode$TAG
@@ -100,14 +110,14 @@ if run dpo || run grpo; then
 fi
 
 if run dpo; then
-    echo "=== DPO (from $SFT_CKPT) ==="
+    stage "DPO (from $SFT_CKPT)"
     python scripts/make_dpo_pairs.py "$SAMPLES" --out "$PAIRS"
     python train/dpo.py --model "$SFT_CKPT" --pairs "$PAIRS" --out checkpoints/dpo$SUFFIX --report-to "$REPORT_TO"
     evaluate checkpoints/dpo$SUFFIX
 fi
 
 if run grpo; then
-    echo "=== GRPO (from $SFT_CKPT) ==="
+    stage "GRPO (from $SFT_CKPT)"
     python train/grpo.py --model "$SFT_CKPT" --out checkpoints/grpo$SUFFIX --vllm \
         --filter-samples "$SAMPLES" --report-to "$REPORT_TO"
     evaluate checkpoints/grpo$SUFFIX
@@ -123,7 +133,7 @@ KD_SUFFIX=${STUDENT_NAME#sft}                   # sft_kodcode -> kd_seq_kodcode,
 KD_PROBLEMS=${KD_PROBLEMS:-20000}
 
 if run kd_seq; then
-    echo "=== distillation: SFT on $TEACHER's answers -> $STUDENT ==="
+    stage "distillation: SFT on $TEACHER's answers -> $STUDENT"
     TEACHER_SAMPLES=$EVAL/$(basename "$TEACHER")_kodcode_n4_t0.7/samples.jsonl
     if [[ ! -f $TEACHER_SAMPLES ]]; then
         python scripts/evaluate.py --model "$TEACHER" --chat --split kodcode --limit "$KD_PROBLEMS" --n 4 --temperature 0.7
@@ -135,7 +145,7 @@ if run kd_seq; then
 fi
 
 if run kd_onpolicy; then
-    echo "=== distillation: on-policy, $TEACHER -> $STUDENT ==="
+    stage "distillation: on-policy, $TEACHER -> $STUDENT"
     python train/distill.py --model "$STUDENT" --teacher "$TEACHER" --n-kodcode "$KD_PROBLEMS" \
         --out checkpoints/kd_onpolicy$KD_SUFFIX --vllm --report-to "$REPORT_TO"
     evaluate checkpoints/kd_onpolicy$KD_SUFFIX
@@ -144,8 +154,9 @@ fi
 if run analyze; then
     # Beyond pass@k: new ability vs. sharpening, reward hacking, hallucination, diversity.
     # CPU only (re-runs the saved eval samples), but it executes model code, so it runs in a job.
-    echo "=== analysis ==="
+    stage "analysis"
     python scripts/analyze.py --eval-dir $EVAL --out outputs/analysis.md
 fi
 
 python scripts/summarize.py $EVAL
+stage done

@@ -18,6 +18,8 @@
 # Distillation into the 0.5B KodCode student (defaults: TEACHER=checkpoints/grpo_kodcode_1.5b,
 # STUDENT=checkpoints/sft_kodcode):
 #   STAGES="kd_seq kd_onpolicy" bash slurm/launch.sh
+# Reward model (RLHF step 1) on RM_POLICY's own answers, graded against the tests -> outputs/reward_eval.md:
+#   STAGES="reward" bash slurm/launch.sh
 #
 #SBATCH --job-name=codealign-pipeline
 #SBATCH --nodes=1
@@ -152,6 +154,27 @@ if run kd_onpolicy; then
     python train/distill.py --model "$STUDENT" --teacher "$TEACHER" --n-kodcode "$KD_PROBLEMS" \
         --out checkpoints/kd_onpolicy$KD_SUFFIX --vllm --report-to "$REPORT_TO"
     evaluate checkpoints/kd_onpolicy$KD_SUFFIX
+fi
+
+# Reward model: pairs of (passing, failing) answers from RM_POLICY on MBPP train + RM_KODCODE
+# KodCode problems, 8 samples each. Graded on RM_POLICY's eval samples, next to DPO's implicit reward.
+RM_POLICY=${RM_POLICY:-checkpoints/sft_kodcode}
+RM_NAME=$(basename "$RM_POLICY")
+RM_SUFFIX=${RM_NAME#sft}                        # sft_kodcode -> rm_kodcode
+RM_KODCODE=${RM_KODCODE:-6000}                  # changing it? delete the old *_kodcode_n8_t1.0 samples first
+
+if run reward; then
+    stage "reward model (answers from $RM_POLICY)"
+    RM_SAMPLES=($EVAL/${RM_NAME}_train_n8_t1.0/samples.jsonl $EVAL/${RM_NAME}_kodcode_n8_t1.0/samples.jsonl)
+    [[ -f ${RM_SAMPLES[0]} ]] || python scripts/evaluate.py --model "$RM_POLICY" --chat --split train --n 8 --temperature 1.0
+    [[ -f ${RM_SAMPLES[1]} ]] || python scripts/evaluate.py --model "$RM_POLICY" --chat --split kodcode \
+        --limit "$RM_KODCODE" --n 8 --temperature 1.0
+    python scripts/make_dpo_pairs.py "${RM_SAMPLES[@]}" --out data/rm_pairs$RM_SUFFIX.jsonl
+    python train/reward.py --model "$RM_POLICY" --pairs data/rm_pairs$RM_SUFFIX.jsonl \
+        --out checkpoints/rm$RM_SUFFIX --report-to "$REPORT_TO"
+    IMPLICIT=$([[ -d checkpoints/dpo$RM_SUFFIX ]] && echo "--implicit checkpoints/dpo$RM_SUFFIX $RM_POLICY")
+    python scripts/eval_reward.py --rm checkpoints/rm$RM_SUFFIX $IMPLICIT \
+        --samples $EVAL/${RM_NAME}_eval_n10_t0.8/samples.jsonl --out outputs/reward_eval$RM_SUFFIX.md
 fi
 
 if run analyze; then

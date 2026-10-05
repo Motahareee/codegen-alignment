@@ -11,7 +11,10 @@
 #
 # A bigger base model: its checkpoints get a size tag (sft_kodcode_1.5b, grpo_kodcode_1.5b, ...)
 #   BASE=Qwen/Qwen2.5-1.5B STAGES="baseline sft_kodcode grpo" SFT_CKPT=checkpoints/sft_kodcode_1.5b \
-#     SFT_ARGS="--batch-size 8 --grad-accum 4" SBATCH_TIMELIMIT=2-00:00:00 bash slurm/launch.sh
+#     SFT_ARGS="--batch-size 8 --grad-accum 4" GRPO_ARGS="--batch-size 8 --grad-accum 8" \
+#     SBATCH_TIMELIMIT=3-00:00:00 bash slurm/launch.sh
+#   (on a 40 GB A100: same effective batch sizes as the 0.5B runs, half the memory per step;
+#    the 0.5B KodCode SFT took 13.7 h, so expect ~40 h for 1.5B)
 # Distillation into the 0.5B KodCode student (defaults: TEACHER=checkpoints/grpo_kodcode_1.5b,
 # STUDENT=checkpoints/sft_kodcode):
 #   STAGES="kd_seq kd_onpolicy" bash slurm/launch.sh
@@ -119,7 +122,7 @@ fi
 if run grpo; then
     stage "GRPO (from $SFT_CKPT)"
     python train/grpo.py --model "$SFT_CKPT" --out checkpoints/grpo$SUFFIX --vllm \
-        --filter-samples "$SAMPLES" --report-to "$REPORT_TO"
+        --filter-samples "$SAMPLES" ${GRPO_ARGS:-} --report-to "$REPORT_TO"
     evaluate checkpoints/grpo$SUFFIX
 fi
 

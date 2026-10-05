@@ -20,7 +20,7 @@ args = ap.parse_args()
 
 for split in ("train", "eval"):
     print(f"dataset {split}: {len(load_split(split))} problems")
-print(f"dataset {KODCODE}: {len(load_dataset(KODCODE, split='train'))} rows")  # ~2.6 GB, for large SFT
+print(f"dataset {KODCODE}: {len(load_dataset(KODCODE, split='train'))} rows")  # ~2.6 GB, for KodCode SFT
 for model in args.models:
     path = snapshot_download(model, allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.py"])
     print(f"model {model}: {path}")

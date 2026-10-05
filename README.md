@@ -32,9 +32,14 @@ One problem is about 0.4 points, so greedy differences of 1–2 points are noise
 | SFT | 0.424 | 0.206 | 0.588 | 0.491 |
 | SFT → DPO | 0.444 | 0.268 | 0.599 | 0.508 |
 | SFT → GRPO | 0.447 | 0.255 | 0.619 | 0.513 |
+| KodCode SFT | 0.479 | 0.389 | 0.669 | 0.538 |
+| KodCode SFT → DPO | 0.479 | 0.433 | 0.673 | 0.543 |
+| KodCode SFT → GRPO | 0.482 | 0.432 | 0.673 | 0.542 |
 
 *Test frac* = average fraction of a problem's tests passed (partial credit).
+*SFT* = 373 MBPP train problems; *KodCode SFT* = those plus ~440k KodCode-V1 problems (one epoch).
 DPO/GRPO rows are from the second run (2026-09-28); the first run's settings did nothing (see below).
+More metrics (pass@k curves, reward hacking, hallucination, rambling): `scripts/analyze.py` → `outputs/analysis.md`.
 
 **What we learned**
 
@@ -49,16 +54,22 @@ DPO/GRPO rows are from the second run (2026-09-28); the first run's settings did
    GRPO at `lr=3e-6`, temperature 0.8, truncated completions masked from the loss:
    sampled pass@1 21% → 26–27%, greedy +2 points (GRPO 44.7%, level with Instruct).
    pass@10 barely moves: they make the model pick its good answers more often rather than solve new problems.
+5. **More SFT data beats RL.** KodCode SFT reaches 47.9% greedy / 38.9% sampled, ahead of Qwen's Instruct model,
+   and fixes the rambling: completions that hit the token limit fall from 62% to 0.2%.
+   Invented names and modules fall from 5% of samples to 2%; most remaining failures are wrong answers (AssertionError).
+6. **RL on top of it sharpens, and only that.** DPO and GRPO both raise sampled pass@1 by ~4.4 points (38.9% → 43%),
+   but greedy (47.9% → 47.9–48.2%) and pass@10 (66.9% → 67.3%) don't move, and problems gained ≈ problems lost
+   (DPO +11/−10, GRPO +8/−7). The samples move toward the answer the model already gave greedily.
+   No reward hacking: no harness tampering passed, and passing the visible test while failing hidden ones didn't rise.
 
 ## Next steps
 
-- [x] **Large SFT**: stage `sft_kodcode` = MBPP train + ~440k KodCode-V1 problems (decontaminated).
+- [x] **KodCode SFT**: stage `sft_kodcode` = MBPP train + ~440k KodCode-V1 problems (decontaminated).
 - [x] **DPO/GRPO on top of the KodCode SFT model**: does RL still help once SFT is much stronger?
 - [ ] **Distillation**: train a 1.5B teacher (KodCode SFT → GRPO), then distill it into the 0.5B KodCode student
       two ways, compared with GRPO from the same student: SFT on the teacher's test-passing answers (`kd_seq`),
       and on-policy distillation, where the student matches the teacher's token probabilities on its own answers (`kd_onpolicy`).
 - [ ] **DPO pairing**: try all pass × fail combinations (or a higher cap) instead of one-to-one pairs; ~3–4× more pairs.
-- [ ] **Sampling quality**: the model still rambles past its answer; try a small penalty for completions that hit the length limit.
 - [ ] RLHF with a learned reward model (roadmap step 3).
 - [ ] From-scratch loss implementations.
 

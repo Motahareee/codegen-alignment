@@ -5,7 +5,7 @@
 # Usually submitted by slurm/launch.sh (which downloads models first). Directly:
 #   sbatch slurm/pipeline.sbatch                # everything
 #   STAGES="grpo" sbatch slurm/pipeline.sbatch  # just one stage (needs earlier outputs)
-#   STAGES="sft_kodcode" SBATCH_TIMELIMIT=16:00:00 bash slurm/launch.sh   # large SFT (not in the default stages)
+#   STAGES="sft_kodcode" SBATCH_TIMELIMIT=16:00:00 bash slurm/launch.sh   # KodCode SFT (not in the default stages)
 #   STAGES="dpo grpo" SFT_CKPT=checkpoints/sft_kodcode bash slurm/launch.sh # DPO/GRPO on top of it
 #   STAGES="analyze" bash slurm/launch.sh      # beyond-pass@k report -> outputs/analysis.md
 #

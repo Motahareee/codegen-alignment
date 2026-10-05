@@ -8,10 +8,20 @@ mixed pass rate.
 
   python train/grpo.py --model checkpoints/sft --out checkpoints/grpo --vllm \
       --filter-samples outputs/eval/sft_train_n8_t1.0/samples.jsonl
+
+RLHF: --reward rm:PATH rewards answers with a learned reward model (train/reward.py)
+instead of the tests. The tests still run on every answer, with weight 0: they are
+logged as rewards/test_gold/mean (the true pass rate) but never trained on. With
+--log-kl the KL from the starting model is logged too, so proxy reward, gold reward
+and KL can be plotted against each other (scripts/overoptimization.py).
+
+  python train/grpo.py --model checkpoints/sft_kodcode --reward rm:checkpoints/rm_kodcode --beta 0.02 \
+      --log-kl --epochs 15 --out checkpoints/rlhf_rm0.02_kodcode --vllm --filter-samples ...
 """
 
 import argparse
 import json
+from pathlib import Path
 
 import torch
 from datasets import Dataset
@@ -22,7 +32,7 @@ from codealign.data import extract_code, load_split
 from codealign.sandbox import run_many
 
 
-def make_reward(kind: str):
+def make_reward(kind: str, name: str | None = None):
     def test_reward(completions, tests, setup, **kwargs) -> list[float]:
         # Conversational datasets give completions as [{"role": "assistant", "content": ...}].
         codes = [extract_code(c[0]["content"]) for c in completions]
@@ -31,7 +41,7 @@ def make_reward(kind: str):
             return [float(r.all_passed) for r in results]
         return [r.frac for r in results]
 
-    test_reward.__name__ = f"test_{kind}"
+    test_reward.__name__ = name or f"test_{kind}"
     return test_reward
 
 
@@ -53,8 +63,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="checkpoints/sft")
     ap.add_argument("--out", default="checkpoints/grpo")
-    ap.add_argument("--reward", default="frac", choices=["frac", "binary"],
-                    help="frac = fraction of tests passed (denser signal); binary = all tests pass")
+    ap.add_argument("--reward", default="frac",
+                    help="frac = fraction of tests passed (denser signal); binary = all tests pass; "
+                         "rm:PATH = learned reward model (RLHF), with the tests logged but not trained on")
+    ap.add_argument("--log-kl", action="store_true",
+                    help="log the KL from the starting model even at --beta 0 (uses beta=1e-6: same objective in practice)")
     ap.add_argument("--filter-samples", help="samples.jsonl from evaluate.py --split train --n 8")
     ap.add_argument("--num-generations", type=int, default=8, help="group size G")
     ap.add_argument("--batch-size", type=int, default=16, help="completions per device per step")
@@ -70,6 +83,17 @@ def main():
     ap.add_argument("--report-to", default="none")
     args = ap.parse_args()
 
+    if args.reward.startswith("rm:"):
+        # Weight 0: the tests are only measured (gold reward), the reward model is what's optimized (proxy).
+        reward_funcs, weights = [args.reward[3:], make_reward("binary", "test_gold")], [1.0, 0.0]
+    elif args.log_kl and args.reward != "binary":
+        # Same gold as the RLHF runs (all tests pass), logged next to the reward trained on.
+        reward_funcs, weights = [make_reward(args.reward), make_reward("binary", "test_gold")], [1.0, 0.0]
+    else:
+        reward_funcs, weights = [make_reward(args.reward)], None
+    # TRL skips the reference model, and with it the KL, when beta == 0.
+    beta = args.beta if args.beta or not args.log_kl else 1e-6
+
     config = GRPOConfig(
         output_dir=args.out,
         num_generations=args.num_generations,
@@ -78,7 +102,8 @@ def main():
         max_completion_length=args.max_completion_length,
         temperature=args.temperature,
         mask_truncated_completions=True,  # completions cut off at max length are excluded from the loss
-        beta=args.beta,
+        beta=beta,
+        reward_weights=weights,
         num_train_epochs=args.epochs,
         max_steps=args.max_steps,
         learning_rate=args.lr * (10 if args.lora else 1),
@@ -101,12 +126,15 @@ def main():
 
     trainer = GRPOTrainer(
         model=args.model,
-        reward_funcs=make_reward(args.reward),
+        reward_funcs=reward_funcs,
         args=config,
         train_dataset=build_dataset(args.filter_samples),
         peft_config=peft_config,
     )
     trainer.train()
+    # Per-step rewards and KL, for the over-optimization curves.
+    Path(args.out).mkdir(parents=True, exist_ok=True)
+    Path(args.out, "log_history.json").write_text(json.dumps(trainer.state.log_history, indent=1))
 
     model = trainer.model.merge_and_unload() if args.lora else trainer.model
     model.save_pretrained(args.out)

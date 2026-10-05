@@ -20,6 +20,9 @@
 #   STAGES="kd_seq kd_onpolicy" bash slurm/launch.sh
 # Reward model (RLHF step 1) on RM_POLICY's own answers, graded against the tests -> outputs/reward_eval.md:
 #   STAGES="reward" bash slurm/launch.sh
+# RLHF: GRPO against that reward model at several KL penalties, plus a control rewarded by the tests,
+# all logging the true pass rate -> outputs/overoptimization_kodcode.md:
+#   STAGES="rlhf" SBATCH_TIMELIMIT=12:00:00 bash slurm/launch.sh
 #
 #SBATCH --job-name=codealign-pipeline
 #SBATCH --nodes=1
@@ -175,6 +178,26 @@ if run reward; then
     IMPLICIT=$([[ -d checkpoints/dpo$RM_SUFFIX ]] && echo "--implicit checkpoints/dpo$RM_SUFFIX $RM_POLICY")
     python scripts/eval_reward.py --rm checkpoints/rm$RM_SUFFIX $IMPLICIT \
         --samples $EVAL/${RM_NAME}_eval_n10_t0.8/samples.jsonl --out outputs/reward_eval$RM_SUFFIX.md
+fi
+
+# RLHF from RM_POLICY on the same prompts as its GRPO run (mixed-pass-rate MBPP train problems),
+# trained longer (RLHF_EPOCHS) so over-optimization has time to show.
+RLHF_BETAS=${RLHF_BETAS:-"0 0.02 0.1"}
+RLHF_EPOCHS=${RLHF_EPOCHS:-15}
+
+if run rlhf; then
+    RLHF_COMMON="--model $RM_POLICY --vllm --log-kl --epochs $RLHF_EPOCHS --report-to $REPORT_TO
+        --filter-samples $EVAL/${RM_NAME}_train_n8_t1.0/samples.jsonl"
+    stage "RLHF control: GRPO rewarded by the tests"
+    python train/grpo.py $RLHF_COMMON --out checkpoints/rlhf_tests$RM_SUFFIX
+    evaluate checkpoints/rlhf_tests$RM_SUFFIX
+    for b in $RLHF_BETAS; do
+        stage "RLHF: GRPO rewarded by rm$RM_SUFFIX, beta=$b"
+        python train/grpo.py $RLHF_COMMON --reward rm:checkpoints/rm$RM_SUFFIX --beta "$b" \
+            --out checkpoints/rlhf_rm$b$RM_SUFFIX
+        evaluate checkpoints/rlhf_rm$b$RM_SUFFIX
+    done
+    python scripts/overoptimization.py checkpoints/rlhf_*$RM_SUFFIX --out outputs/overoptimization$RM_SUFFIX.md
 fi
 
 if run analyze; then

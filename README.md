@@ -35,6 +35,10 @@ One problem is about 0.4 points, so greedy differences of 1–2 points are noise
 | KodCode SFT | 0.479 | 0.389 | 0.669 | 0.538 |
 | KodCode SFT → DPO | 0.479 | 0.433 | 0.673 | 0.543 |
 | KodCode SFT → GRPO | 0.482 | 0.432 | 0.673 | 0.542 |
+| **1.5B:** Qwen2.5-1.5B (base) | 0.140 | 0.130 | 0.588 | 0.150 |
+| Qwen2.5-1.5B-Instruct (reference) | 0.572 | 0.533 | 0.790 | 0.632 |
+| 1.5B KodCode SFT | 0.611 | 0.519 | 0.798 | 0.674 |
+| 1.5B KodCode SFT → GRPO (distillation teacher) | 0.607 | 0.597 | 0.817 | 0.671 |
 
 *Test frac* = average fraction of a problem's tests passed (partial credit).
 *SFT* = 373 MBPP train problems; *KodCode SFT* = those plus ~440k KodCode-V1 problems (one epoch).
@@ -61,6 +65,11 @@ More metrics (pass@k curves, reward hacking, hallucination, rambling): `scripts/
    but greedy (47.9% → 47.9–48.2%) and pass@10 (66.9% → 67.3%) don't move, and problems gained ≈ problems lost
    (DPO +11/−10, GRPO +8/−7). The samples move toward the answer the model already gave greedily.
    No reward hacking: no harness tampering passed, and passing the visible test while failing hidden ones didn't rise.
+7. **The same holds at 1.5B, and size beats every post-training method.** The same recipe on Qwen2.5-1.5B
+   (KodCode SFT 17 h, GRPO 42 min on one A100): SFT beats Qwen's Instruct model again (61.1% vs 57.2% greedy);
+   GRPO again raises sampled pass@1 (51.9% → 59.7%) with greedy flat (61.1% → 60.7%) and pass@10 +1.9 points.
+   Going 0.5B → 1.5B adds ~13 points greedy and ~15 points pass@10; DPO/GRPO on the 0.5B KodCode model added
+   0 and 0.4. The 1.5B GRPO model is the teacher for distillation into the 0.5B student.
 
 ## Reward model (RLHF step 1)
 
@@ -99,7 +108,7 @@ MBPP eval problems (never seen in training); the tests say which actually pass.
 
 - [x] **KodCode SFT**: stage `sft_kodcode` = MBPP train + ~440k KodCode-V1 problems (decontaminated).
 - [x] **DPO/GRPO on top of the KodCode SFT model**: does RL still help once SFT is much stronger?
-- [ ] **Distillation**: train a 1.5B teacher (KodCode SFT → GRPO), then distill it into the 0.5B KodCode student
+- [ ] **Distillation**: ~~train a 1.5B teacher (KodCode SFT → GRPO)~~ (done), then distill it into the 0.5B KodCode student
       two ways, compared with GRPO from the same student: SFT on the teacher's test-passing answers (`kd_seq`),
       and on-policy distillation, where the student matches the teacher's token probabilities on its own answers (`kd_onpolicy`).
 - [ ] **DPO pairing**: try all pass × fail combinations (or a higher cap) instead of one-to-one pairs; ~3–4× more pairs.

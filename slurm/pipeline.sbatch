@@ -20,6 +20,11 @@
 #   STAGES="kd_seq kd_onpolicy" bash slurm/launch.sh
 # Reward model (RLHF step 1) on RM_POLICY's own answers, graded against the tests -> outputs/reward_eval.md:
 #   STAGES="reward" bash slurm/launch.sh
+# ... starting from a bigger model (RM_INIT; answers and pairs still come from RM_POLICY):
+#   EXTRA_MODELS=Qwen/Qwen2.5-Coder-7B-Instruct STAGES="reward" RM_INIT=Qwen/Qwen2.5-Coder-7B-Instruct \
+#     RM_OUT=checkpoints/rm_kodcode_coder7b RM_ARGS="--lora --batch-size 4 --grad-accum 8" bash slurm/launch.sh
+# LLM judges (direct answer vs reasoning first), graded next to the reward models -> outputs/reward_eval_judges.md:
+#   EXTRA_MODELS=Qwen/Qwen2.5-Coder-7B-Instruct STAGES="judge" bash slurm/launch.sh
 # RLHF: GRPO against that reward model at several KL penalties, plus a control rewarded by the tests,
 # all logging the true pass rate -> outputs/overoptimization_kodcode.md:
 #   STAGES="rlhf" SBATCH_TIMELIMIT=12:00:00 bash slurm/launch.sh
@@ -165,6 +170,11 @@ RM_POLICY=${RM_POLICY:-checkpoints/sft_kodcode}
 RM_NAME=$(basename "$RM_POLICY")
 RM_SUFFIX=${RM_NAME#sft}                        # sft_kodcode -> rm_kodcode
 RM_KODCODE=${RM_KODCODE:-6000}                  # changing it? delete the old *_kodcode_n8_t1.0 samples first
+RM_INIT=${RM_INIT:-$RM_POLICY}                  # model the reward model starts from
+RM_OUT=${RM_OUT:-checkpoints/rm$RM_SUFFIX}
+finished_rms() {  # reward models that finished saving (config.json is written last)
+    for d in checkpoints/rm$RM_SUFFIX*; do [[ -f $d/config.json ]] && echo "$d"; done
+}
 
 if run reward; then
     stage "reward model (answers from $RM_POLICY)"
@@ -173,11 +183,30 @@ if run reward; then
     [[ -f ${RM_SAMPLES[1]} ]] || python scripts/evaluate.py --model "$RM_POLICY" --chat --split kodcode \
         --limit "$RM_KODCODE" --n 8 --temperature 1.0
     python scripts/make_dpo_pairs.py "${RM_SAMPLES[@]}" --out data/rm_pairs$RM_SUFFIX.jsonl
-    python train/reward.py --model "$RM_POLICY" --pairs data/rm_pairs$RM_SUFFIX.jsonl \
-        --out checkpoints/rm$RM_SUFFIX --report-to "$REPORT_TO"
+    python train/reward.py --model "$RM_INIT" --pairs data/rm_pairs$RM_SUFFIX.jsonl \
+        --out "$RM_OUT" ${RM_ARGS:-} --report-to "$REPORT_TO"
     IMPLICIT=$([[ -d checkpoints/dpo$RM_SUFFIX ]] && echo "--implicit checkpoints/dpo$RM_SUFFIX $RM_POLICY")
-    python scripts/eval_reward.py --rm checkpoints/rm$RM_SUFFIX $IMPLICIT \
+    python scripts/eval_reward.py --rm $(finished_rms) $IMPLICIT \
         --samples $EVAL/${RM_NAME}_eval_n10_t0.8/samples.jsonl --out outputs/reward_eval$RM_SUFFIX.md
+fi
+
+# LLM judges on RM_POLICY's eval answers: each model answers directly (P(YES)) and after reasoning
+# (4 sampled verdicts). Graded with the reward models on the same exam.
+JUDGE_MODELS=${JUDGE_MODELS:-"Qwen/Qwen2.5-0.5B-Instruct Qwen/Qwen2.5-1.5B-Instruct Qwen/Qwen2.5-Coder-7B-Instruct"}
+
+if run judge; then
+    JUDGE_SAMPLES=$EVAL/${RM_NAME}_eval_n10_t0.8/samples.jsonl
+    JUDGE_SCORES=()
+    for m in $JUDGE_MODELS; do
+        for mode in direct cot; do
+            stage "judge: $m ($mode)"
+            out=outputs/judge$RM_SUFFIX/$(basename "$m")_$mode.json
+            [[ -f $out ]] || python scripts/judge.py --model "$m" --mode $mode --samples "$JUDGE_SAMPLES" --out "$out"
+            JUDGE_SCORES+=("$(basename "$m")_$mode=$out")
+        done
+    done
+    python scripts/eval_reward.py --rm $(finished_rms) --scores "${JUDGE_SCORES[@]}" \
+        --samples "$JUDGE_SAMPLES" --out outputs/reward_eval_judges$RM_SUFFIX.md
 fi
 
 # RLHF from RM_POLICY on the same prompts as its GRPO run (mixed-pass-rate MBPP train problems),

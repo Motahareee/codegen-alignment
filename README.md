@@ -62,6 +62,39 @@ More metrics (pass@k curves, reward hacking, hallucination, rambling): `scripts/
    (DPO +11/−10, GRPO +8/−7). The samples move toward the answer the model already gave greedily.
    No reward hacking: no harness tampering passed, and passing the visible test while failing hidden ones didn't rise.
 
+## Reward model (RLHF step 1)
+
+A reward model scores an answer with one number, without running it. Ours is the KodCode SFT model
+(Qwen2.5-0.5B, all weights trained) with its next-token layer replaced by a linear layer 896 → 1,
+read at the last token. Trained 1 epoch with the Bradley-Terry loss −log σ(score_good − score_bad) on
+(passing, failing) pairs of `sft_kodcode`'s own answers: MBPP train + 6000 KodCode problems, 8 answers each.
+
+**Exam:** `scripts/eval_reward.py` scores the KodCode SFT model's 10 eval answers on each of the 257
+MBPP eval problems (never seen in training); the tests say which actually pass.
+
+| Scorer | Pairwise acc | Best-of-10 | corr(score, length) |
+|---|---|---|---|
+| reward model (`rm_kodcode`) | 0.579 | 0.405 | −0.45 |
+| DPO implicit reward (`dpo_kodcode` vs `sft_kodcode`) | 0.591 | 0.420 | +0.31 |
+| random (one draw, ±0.03) | 0.451 | 0.362 | +0.03 |
+| perfect picker | 1 | 0.669 | (pass vs length: −0.05) |
+
+*Pairwise acc* = a passing answer scored above a failing one for the same problem (0.5 = chance).
+*Best-of-10* = pass rate of the top-scored of 10 answers; random pick = 0.389 (pass@1), perfect = 0.669 (pass@10).
+
+1. **The reward model is a poor judge of correctness.** 58% pairwise accuracy is just above chance, and
+   picking the best of 10 by its score captures only ~6% of the possible gain (0.389 → 0.405 of 0.669).
+   More samples don't help: best-of-4 (0.412) is as good as best-of-10.
+2. **It learned a shortcut: short = good.** Within a problem its score correlates −0.45 with length, while
+   passing barely depends on length (−0.05). In its training pairs, failing answers were probably longer
+   more often (rambling at temperature 1.0), so length became a cheap stand-in for correctness.
+3. **DPO's implicit reward is about as good, with the opposite bias** (prefers longer answers, +0.31):
+   two rewards trained on the same pairs found different shortcuts.
+4. **RLHF against this reward model would mostly teach brevity.** Before running RLHF, we try two fixes:
+   *generation steps* (an LLM judge that reasons before its verdict, vs. one that answers directly) and
+   *a stronger model* (a 7B code model as judge and as reward-model initialization). A one-pass 0.5B reward
+   model has to decide whether code passes hidden tests just by reading it once.
+
 ## Next steps
 
 - [x] **KodCode SFT**: stage `sft_kodcode` = MBPP train + ~440k KodCode-V1 problems (decontaminated).

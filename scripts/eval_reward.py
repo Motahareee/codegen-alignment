@@ -9,9 +9,10 @@ pass/fail label. A scorer gives every sample a number; we then ask:
                         Between random choice (pass@1) and a perfect picker (pass@k).
   3. length bias        within a problem, does the score just track answer length?
 
-Scorers: a trained reward model (--rm, train/reward.py) and DPO's implicit reward
+Scorers: a trained reward model (--rm, train/reward.py), DPO's implicit reward
 (--implicit DPO REF): log pi_dpo(y|x) - log pi_ref(y|x), the reward DPO optimizes without
-ever building a reward model. Needs a GPU for speed; CPU works for --limit smoke tests.
+ever building a reward model, and precomputed scores such as an LLM judge's
+(--scores NAME=PATH, from scripts/judge.py). Needs a GPU for speed; CPU works for --limit smoke tests.
 
   python scripts/eval_reward.py --rm checkpoints/rm_kodcode \
       --implicit checkpoints/dpo_kodcode checkpoints/sft_kodcode \
@@ -124,6 +125,8 @@ def main():
     ap.add_argument("--samples", nargs="+", default=["outputs/eval/sft_kodcode_eval_n10_t0.8/samples.jsonl"])
     ap.add_argument("--rm", nargs="*", default=[], help="reward model checkpoints")
     ap.add_argument("--implicit", nargs=2, metavar=("DPO", "REF"), help="DPO checkpoint and its reference (SFT) model")
+    ap.add_argument("--scores", nargs="*", default=[], metavar="NAME=PATH",
+                    help="precomputed scores (scripts/judge.py output), in samples.jsonl order")
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--limit", type=int, help="first N problems only (smoke tests)")
     ap.add_argument("--out", default="outputs/reward_eval.md")
@@ -142,6 +145,12 @@ def main():
             dpo, ref = args.implicit
             scorers[f"implicit ({Path(dpo).name})"] = (completion_logps(dpo, convs, args.batch_size)
                                                       - completion_logps(ref, convs, args.batch_size))
+        for spec in args.scores:
+            name, score_path = spec.split("=", 1)
+            data = json.load(open(score_path))
+            if Path(data["samples"]).parent.name != Path(path).parent.name or len(data["scores"]) < len(convs):
+                raise ValueError(f"{score_path} scores {data['samples']}, not {path}")
+            scorers[name] = np.array(data["scores"][: len(convs)])
         scorers["random"] = np.random.default_rng(0).random(len(convs))
 
         n = len(rows[0]["completions"])

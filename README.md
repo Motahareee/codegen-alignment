@@ -35,6 +35,8 @@ One problem is about 0.4 points, so greedy differences of 1–2 points are noise
 | KodCode SFT | 0.479 | 0.389 | 0.669 | 0.538 |
 | KodCode SFT → DPO | 0.479 | 0.433 | 0.673 | 0.543 |
 | KodCode SFT → GRPO | 0.482 | 0.432 | 0.673 | 0.542 |
+| KodCode SFT → `kd_seq` (SFT on the 1.5B teacher's passing answers) | 0.463 | 0.428 | 0.677 | 0.525 |
+| KodCode SFT → `kd_onpolicy` (match the teacher's token probabilities) | 0.455 | 0.421 | 0.646 | 0.514 |
 | **1.5B:** Qwen2.5-1.5B (base) | 0.140 | 0.130 | 0.588 | 0.150 |
 | Qwen2.5-1.5B-Instruct (reference) | 0.572 | 0.533 | 0.790 | 0.632 |
 | 1.5B KodCode SFT | 0.611 | 0.519 | 0.798 | 0.674 |
@@ -70,6 +72,14 @@ More metrics (pass@k curves, reward hacking, hallucination, rambling): `scripts/
    GRPO again raises sampled pass@1 (51.9% → 59.7%) with greedy flat (61.1% → 60.7%) and pass@10 +1.9 points.
    Going 0.5B → 1.5B adds ~13 points greedy and ~15 points pass@10; DPO/GRPO on the 0.5B KodCode model added
    0 and 0.4. The 1.5B GRPO model is the teacher for distillation into the 0.5B student.
+8. **Distillation from the 1.5B teacher behaved like RL: sharpening, no new problems.** Both methods start from
+   the 0.5B KodCode SFT model, as GRPO did. `kd_seq`: the teacher answered 20k KodCode problems 4 times, solved 64%,
+   and the student was fine-tuned 1 epoch on those 12,840 passing answers. `kd_onpolicy`: 400 steps of TRL's
+   DistillationTrainer (reverse KL, lr 3e-6). Both raise sampled pass@1 by 3–4 points, lower greedy by ~2, and leave
+   pass@10 flat (0.677, 0.646 vs 0.669); problems gained ≈ lost (+14/−12, +7/−13). The student absorbed almost none of
+   the teacher's 13–15 point lead. Untested explanations: too small a dose (13k teacher answers vs 440k gold ones the
+   student already learned), the student's capacity (much of the lead is the bigger pretrained base: base-model
+   pass@10 0.588 vs 0.490), `kd_seq` keeping only problems the teacher solves, and reverse KL being mode-seeking.
 
 ## Reward model (RLHF step 1)
 
@@ -108,7 +118,7 @@ MBPP eval problems (never seen in training); the tests say which actually pass.
 
 - [x] **KodCode SFT**: stage `sft_kodcode` = MBPP train + ~440k KodCode-V1 problems (decontaminated).
 - [x] **DPO/GRPO on top of the KodCode SFT model**: does RL still help once SFT is much stronger?
-- [ ] **Distillation**: ~~train a 1.5B teacher (KodCode SFT → GRPO)~~ (done), then distill it into the 0.5B KodCode student
+- [x] **Distillation**: ~~train a 1.5B teacher (KodCode SFT → GRPO)~~ (done), then distill it into the 0.5B KodCode student
       two ways, compared with GRPO from the same student: SFT on the teacher's test-passing answers (`kd_seq`),
       and on-policy distillation, where the student matches the teacher's token probabilities on its own answers (`kd_onpolicy`).
 - [ ] **DPO pairing**: try all pass × fail combinations (or a higher cap) instead of one-to-one pairs; ~3–4× more pairs.
@@ -179,5 +189,5 @@ Every training script takes `--max-steps N` and `--lora` for quick local smoke t
 - [ ] **3. RLHF**: reward model on those pairs + RL against it (TRL 1.x dropped `PPOTrainer`; use `RLOOTrainer`/`GRPOTrainer` with the RM); compare the RM score with the true pass rate (reward hacking)
 - [x] **4. GRPO**: test pass rate as reward; filter to problems with 0 < pass rate < 1: sampled pass@1 21% → 26%
 - [~] **5. Compare**: `scripts/summarize.py` table above; PPO/RLHF row still missing
-- [ ] **6. Distillation**: 1.5B teacher → 0.5B student, sequence-level vs on-policy, vs GRPO
+- [x] **6. Distillation**: 1.5B teacher → 0.5B student, sequence-level vs on-policy, vs GRPO: sharpening only (finding 8)
 - [ ] **From scratch**: the SFT (masked), DPO and GRPO losses on a tiny example

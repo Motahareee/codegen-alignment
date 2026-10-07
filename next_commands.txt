@@ -1,0 +1,31 @@
+# Where we are (2026-10-07) and what to run on the cluster (TAMU Grace)
+# Results so far are in README.md; concepts explained in notes/concepts.md.
+
+# 0. After a new SSH session: go to the project and activate the env
+cd $SCRATCH/codegen-alignment
+module purge && module load GCCcore/13.2.0 Python/3.11.5
+source $SCRATCH/envs/codealign/bin/activate
+git pull
+# launch.sh needs STAGES; paste each launch command as ONE line (a broken "\" line once
+# submitted the default full pipeline by accident).
+
+# --- RUNNING (submitted 2026-10-06 ~22:20, 2-day limit) ---
+#   20031574  kd_onpolicy_rkl2k  on-policy distillation, reverse KL, 2000 steps, lr 1e-5
+#   20031718  kd_onpolicy_fkl2k  on-policy distillation, forward KL, 2000 steps, lr 1e-5
+# Check progress (loss should fall; progress bar shows time left):
+for j in 20031574 20031718; do echo "== $j"; grep -o "'loss': '[^']*'" logs/codealign-pipeline-$j.out | sed -n '1p;$p'; grep -o "[0-9]*/2000 \[[^]]*\]" logs/codealign-pipeline-$j.out | tail -1; done
+# When both finish: paste to Claude
+python scripts/summarize.py outputs/eval
+STAGES="analyze" bash slurm/launch.sh     # then: cat outputs/analysis.md
+
+# --- READY, NOT YET SUBMITTED ---
+# Reward-model fixes (the 0.5B reward model was near chance and rewarded short answers):
+# a) LLM judges, direct vs reasoning-first, 0.5B / 1.5B / Coder-7B -> outputs/reward_eval_judges_kodcode.md
+EXTRA_MODELS=Qwen/Qwen2.5-Coder-7B-Instruct STAGES="judge" bash slurm/launch.sh
+# b) Reward model from Qwen2.5-Coder-7B-Instruct (LoRA) -> outputs/reward_eval_kodcode.md
+EXTRA_MODELS=Qwen/Qwen2.5-Coder-7B-Instruct STAGES="reward" RM_INIT=Qwen/Qwen2.5-Coder-7B-Instruct RM_OUT=checkpoints/rm_kodcode_coder7b RM_ARGS="--lora --batch-size 4 --grad-accum 8" SBATCH_TIMELIMIT=12:00:00 bash slurm/launch.sh
+
+# --- AFTER a good reward model exists ---
+# RLHF over-optimization: GRPO vs the reward model at beta 0 / 0.02 / 0.1 + a tests control
+# (uses checkpoints/rm_kodcode; point it at the better reward model first) -> outputs/overoptimization_kodcode.md
+STAGES="rlhf" SBATCH_TIMELIMIT=12:00:00 bash slurm/launch.sh

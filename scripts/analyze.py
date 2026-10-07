@@ -28,7 +28,7 @@ from codealign.sandbox import run_many
 
 # Display order within one model size; the base and Instruct models come first.
 ORDER = ["sft", "dpo", "grpo", "sft_kodcode", "dpo_kodcode", "grpo_kodcode", "kd_seq_kodcode", "kd_onpolicy_kodcode",
-         "rlhf_tests_kodcode", "rlhf_rm0_kodcode", "rlhf_rm0.02_kodcode", "rlhf_rm0.1_kodcode"]
+         "kd_onpolicy_rkl2k_kodcode", "kd_onpolicy_fkl2k_kodcode", "rlhf_tests_kodcode", "rlhf_rm0_kodcode", "rlhf_rm0.02_kodcode", "rlhf_rm0.1_kodcode"]
 
 
 def split_size(name: str) -> tuple[str, str]:
@@ -45,7 +45,8 @@ def parent(name: str) -> str | None:
     tag = "" if size == "0.5B" else "_" + size.lower()
     if core in ("sft", "sft_kodcode"):
         return f"Qwen2.5-{size}"
-    m = re.fullmatch(r"(?:dpo|grpo|kd_seq|kd_onpolicy|rlhf_tests|rlhf_rm[\d.]+)(_kodcode)?", core)
+    # kd_onpolicy may carry a run name: kd_onpolicy_fkl2k_kodcode (parent sft_kodcode)
+    m = re.fullmatch(r"(?:dpo|grpo|kd_seq|kd_onpolicy(?:_(?!kodcode)[a-z0-9]+)?|rlhf_tests|rlhf_rm[\d.]+)(_kodcode)?", core)
     return f"sft{m.group(1) or ''}{tag}" if m else None
 
 

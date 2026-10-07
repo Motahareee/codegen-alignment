@@ -18,6 +18,9 @@
 # Distillation into the 0.5B KodCode student (defaults: TEACHER=checkpoints/grpo_kodcode_1.5b,
 # STUDENT=checkpoints/sft_kodcode):
 #   STAGES="kd_seq kd_onpolicy" bash slurm/launch.sh
+# Longer on-policy runs: KD_NAME names the run, KD_ARGS go to train/distill.py, e.g.
+#   STAGES="kd_onpolicy" KD_NAME=kd_onpolicy_fkl2k KD_ARGS="--beta 0 --max-steps 2000 --lr 1e-5 --n-kodcode 60000" \
+#     SBATCH_TIMELIMIT=2-00:00:00 bash slurm/launch.sh
 # Reward model (RLHF step 1) on RM_POLICY's own answers, graded against the tests -> outputs/reward_eval.md:
 #   STAGES="reward" bash slurm/launch.sh
 # ... starting from a bigger model (RM_INIT; answers and pairs still come from RM_POLICY):
@@ -158,10 +161,11 @@ if run kd_seq; then
 fi
 
 if run kd_onpolicy; then
-    stage "distillation: on-policy, $TEACHER -> $STUDENT"
+    KD_OUT=checkpoints/${KD_NAME:-kd_onpolicy}$KD_SUFFIX
+    stage "distillation: on-policy, $TEACHER -> $STUDENT ($KD_OUT ${KD_ARGS:-})"
     python train/distill.py --model "$STUDENT" --teacher "$TEACHER" --n-kodcode "$KD_PROBLEMS" \
-        --out checkpoints/kd_onpolicy$KD_SUFFIX --vllm --report-to "$REPORT_TO"
-    evaluate checkpoints/kd_onpolicy$KD_SUFFIX
+        --out "$KD_OUT" --vllm ${KD_ARGS:-} --report-to "$REPORT_TO"
+    evaluate "$KD_OUT"
 fi
 
 # Reward model: pairs of (passing, failing) answers from RM_POLICY on MBPP train + RM_KODCODE

@@ -7,12 +7,14 @@ GRPO from the same student (reward = tests passed, one number per answer) and
 with plain SFT on the teacher's answers (scripts/make_distill_data.py).
 
 Student and teacher must share a vocabulary (any two Qwen2.5 sizes do).
+Checkpoints are saved every 100 steps; rerunning resumes from the last one (delete --out to start over).
 
   python train/distill.py --model checkpoints/sft_kodcode --teacher checkpoints/grpo_kodcode_1.5b \
       --out checkpoints/kd_onpolicy_kodcode --vllm
 """
 
 import argparse
+from pathlib import Path
 
 import torch
 from datasets import Dataset
@@ -81,7 +83,10 @@ def main():
         train_dataset=build_dataset(args.n_kodcode),
         peft_config=peft_config,
     )
-    trainer.train()
+    resume = any(Path(args.out).glob("checkpoint-*"))
+    if resume:
+        print(f"resuming from the last checkpoint in {args.out}")
+    trainer.train(resume_from_checkpoint=resume or None)
 
     model = trainer.model.merge_and_unload() if args.lora else trainer.model
     model.save_pretrained(args.out)

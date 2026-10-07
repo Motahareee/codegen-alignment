@@ -161,7 +161,7 @@ pytest
 
 # cluster (GPU)
 pip install -e ".[train,dev]"
-git pull && bash slurm/launch.sh             # on the login node: download, then submit the GPU job
+git pull && STAGES="baseline sft dpo grpo" bash slurm/launch.sh   # login node: download, then submit (STAGES required)
 STAGES="dpo grpo" bash slurm/launch.sh       # rerun selected stages
 python scripts/summarize.py                  # results table
 ```

@@ -18,7 +18,7 @@ if [[ -z ${STAGES:-} ]]; then
 fi
 echo "== settings =="
 for v in STAGES BASE SFT_CKPT SFT_ARGS GRPO_ARGS TEACHER STUDENT KD_NAME KD_ARGS KD_PROBLEMS \
-         RM_POLICY RM_INIT RM_OUT RM_ARGS JUDGE_MODELS RLHF_BETAS RLHF_EPOCHS EXTRA_MODELS SBATCH_TIMELIMIT; do
+         RM_POLICY RM_INIT RM_OUT RM_ARGS JUDGE_MODELS RLHF_BETAS RLHF_EPOCHS EXTRA_MODELS SBATCH_TIMELIMIT GPUS; do
     [[ -n ${!v:-} ]] && echo "  $v=${!v}"
 done
 
@@ -33,7 +33,7 @@ python scripts/download_assets.py --models "$BASE" "$BASE-Instruct" ${EXTRA_MODE
 
 echo "== submitting GPU job =="
 mkdir -p logs   # SLURM needs the log directory to exist before the job starts
-jobid=$(sbatch --parsable slurm/pipeline.sbatch)
+jobid=$(sbatch --parsable ${GPUS:+--gres=gpu:a100:$GPUS} slurm/pipeline.sbatch)
 echo "submitted job $jobid"
 echo "  status:   squeue -j $jobid"
 echo "  progress: tail -f logs/codealign-pipeline-$jobid.out"

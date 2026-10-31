@@ -14,6 +14,7 @@ from there. To start over instead, delete the output directory first.
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -52,6 +53,13 @@ def main():
     ap.add_argument("--report-to", default="none", help="e.g. wandb")
     args = ap.parse_args()
     long_run = args.data != "mbpp"
+    # Data parallel (accelerate launch): each GPU takes batch-size examples, so divide the
+    # accumulation to keep the effective batch (batch x accum x GPUs) the same as on one GPU.
+    world = int(os.environ.get("WORLD_SIZE", 1))
+    if args.grad_accum % world:
+        raise SystemExit(f"--grad-accum {args.grad_accum} is not divisible by {world} GPUs")
+    grad_accum = args.grad_accum // world
+    print(f"effective batch: {args.batch_size} x {grad_accum} accum x {world} GPU(s) = {args.batch_size * grad_accum * world}")
 
     config = SFTConfig(
         output_dir=args.out,
@@ -61,7 +69,7 @@ def main():
         lr_scheduler_type="cosine",
         warmup_steps=0.05,  # float < 1 = fraction of total steps
         per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=args.grad_accum,
+        gradient_accumulation_steps=grad_accum,
         max_length=1024,
         eos_token="<|im_end|>",  # Qwen base models use <|endoftext|>; chat turns end with <|im_end|>
         bf16=torch.cuda.is_available(),
@@ -81,6 +89,8 @@ def main():
         print(f"resuming from the last checkpoint in {args.out}")
     trainer.train(resume_from_checkpoint=resume or None)
 
+    if not trainer.is_world_process_zero():  # multi-GPU: only one process writes the model
+        return
     # Save a plain merged model so evaluate.py / vLLM / later stages can load it directly.
     model = trainer.model.merge_and_unload() if args.lora else trainer.model
     tok = trainer.processing_class

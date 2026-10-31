@@ -61,6 +61,11 @@ REPORT_TO=${REPORT_TO:-none}        # set REPORT_TO=wandb to get training curves
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs data checkpoints outputs
 BASE=${BASE:-Qwen/Qwen2.5-0.5B}
+# GPUS=2: SFT stages train data-parallel on 2 GPUs of one node (launch.sh requests them).
+# sft.py divides --grad-accum by the GPU count, so the effective batch and results stay comparable.
+GPUS=${GPUS:-1}
+SFT_PY="python"
+(( GPUS > 1 )) && SFT_PY="accelerate launch --num_processes $GPUS --num_machines 1"
 SIZE=$(basename "$BASE"); SIZE=${SIZE##*-}      # Qwen/Qwen2.5-1.5B -> 1.5B
 TAG=$([[ $SIZE == 0.5B ]] && echo "" || echo "_${SIZE,,}")   # "" for 0.5B, "_1.5b" for 1.5B
 STAGES=${STAGES:-"baseline sft dpo grpo"}
@@ -95,7 +100,7 @@ fi
 
 if run sft; then
     stage "SFT"
-    python train/sft.py --model "$BASE" --out checkpoints/sft$TAG --report-to "$REPORT_TO"
+    $SFT_PY train/sft.py --model "$BASE" --out checkpoints/sft$TAG --report-to "$REPORT_TO"
     evaluate checkpoints/sft$TAG
 fi
 
@@ -104,7 +109,7 @@ if run sft_kodcode; then
     # checkpoint, so it shows up as its own row next to the MBPP-only SFT.
     # SFT_ARGS: extra flags, e.g. a smaller batch for bigger models; KODCODE_MAX caps the examples.
     stage "SFT (KodCode, $BASE)"
-    python train/sft.py --model "$BASE" --data kodcode --epochs 1 ${SFT_ARGS:---batch-size 16} \
+    $SFT_PY train/sft.py --model "$BASE" --data kodcode --epochs 1 ${SFT_ARGS:---batch-size 16} \
         ${KODCODE_MAX:+--max-examples $KODCODE_MAX} --out checkpoints/sft_kodcode$TAG --report-to "$REPORT_TO"
     evaluate checkpoints/sft_kodcode$TAG
 fi
@@ -156,7 +161,7 @@ if run kd_seq; then
     fi
     KD_DATA=data/kd_seq_$(basename "$TEACHER").jsonl
     python scripts/make_distill_data.py "$TEACHER_SAMPLES" --out "$KD_DATA"
-    python train/sft.py --model "$STUDENT" --data "$KD_DATA" --epochs 1 --out checkpoints/kd_seq$KD_SUFFIX --report-to "$REPORT_TO"
+    $SFT_PY train/sft.py --model "$STUDENT" --data "$KD_DATA" --epochs 1 --out checkpoints/kd_seq$KD_SUFFIX --report-to "$REPORT_TO"
     evaluate checkpoints/kd_seq$KD_SUFFIX
 fi
 

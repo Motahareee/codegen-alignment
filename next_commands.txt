@@ -30,10 +30,11 @@ for f in $(grep -l "=== DPO" logs/*.out); do echo "== $f"; for k in chosen rejec
 # 6. Reward model from Qwen2.5-Coder-7B-Instruct (LoRA) -> outputs/reward_eval_kodcode.md
 EXTRA_MODELS=Qwen/Qwen2.5-Coder-7B-Instruct STAGES="reward" RM_INIT=Qwen/Qwen2.5-Coder-7B-Instruct RM_OUT=checkpoints/rm_kodcode_coder7b RM_ARGS="--lora --batch-size 4 --grad-accum 8" SBATCH_TIMELIMIT=12:00:00 bash slurm/launch.sh
 
-# 7. Multi-GPU SFT (GPUS=2, added 2026-10-29). Check nodes have 2 A100s, then a ~10 min test on MBPP SFT
-#    (the log should print "effective batch: 8 x 1 accum x 2 GPU(s) = 16"):
+# 7. Multi-GPU SFT (GPUS=2, added 2026-10-29). Check nodes have 2 A100s, then a ~10 min test: MBPP SFT
+#    on 2 GPUs into checkpoints/sft_2gpu (checkpoints/sft untouched). Log should print
+#    "effective batch: 8 x 1 accum x 2 GPU(s) = 16"; scores should be close to sft (0.424 / 0.206 / 0.588).
 sinfo -p gpu -o "%N %G" | head
-GPUS=2 STAGES="sft" bash slurm/launch.sh
+GPUS=2 SFT_NAME=sft_2gpu STAGES="sft" bash slurm/launch.sh
 
 # --- AFTER a good reward model exists ---
 # RLHF over-optimization: GRPO vs the reward model at beta 0 / 0.02 / 0.1 + a tests control

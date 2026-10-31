@@ -99,9 +99,10 @@ if run baseline; then
 fi
 
 if run sft; then
-    stage "SFT"
-    $SFT_PY train/sft.py --model "$BASE" --out checkpoints/sft$TAG --report-to "$REPORT_TO"
-    evaluate checkpoints/sft$TAG
+    SFT_NAME=${SFT_NAME:-sft$TAG}   # e.g. SFT_NAME=sft_2gpu to test GPUS=2 without overwriting checkpoints/sft
+    stage "SFT ($SFT_NAME)"
+    $SFT_PY train/sft.py --model "$BASE" --out checkpoints/$SFT_NAME --report-to "$REPORT_TO"
+    evaluate checkpoints/$SFT_NAME
 fi
 
 if run sft_kodcode; then

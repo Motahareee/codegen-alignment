@@ -223,20 +223,28 @@ fi
 # trained longer (RLHF_EPOCHS) so over-optimization has time to show.
 RLHF_BETAS=${RLHF_BETAS:-"0 0.02 0.1"}
 RLHF_EPOCHS=${RLHF_EPOCHS:-15}
+RLHF_RM=${RLHF_RM:-checkpoints/rm$RM_SUFFIX}   # e.g. checkpoints/rm_kodcode_coder7b
+RLHF_TAG=$(basename "$RLHF_RM")                # runs are named after their reward model
 
 if run rlhf; then
+    # RLHF_ARGS: extra grpo.py flags, e.g. "--max-steps 5" for a memory test with a big reward model
     RLHF_COMMON="--model $RM_POLICY --vllm --log-kl --epochs $RLHF_EPOCHS --report-to $REPORT_TO
-        --filter-samples $EVAL/${RM_NAME}_train_n8_t1.0/samples.jsonl"
-    stage "RLHF control: GRPO rewarded by the tests"
-    python train/grpo.py $RLHF_COMMON --out checkpoints/rlhf_tests$RM_SUFFIX
-    evaluate checkpoints/rlhf_tests$RM_SUFFIX
+        --filter-samples $EVAL/${RM_NAME}_train_n8_t1.0/samples.jsonl ${RLHF_ARGS:-}"
+    RUNS=(checkpoints/rlhf_tests$RM_SUFFIX)
+    # The control doesn't depend on the reward model: run once. RLHF_CONTROL=0 skips it (e.g. a short test).
+    if [[ ${RLHF_CONTROL:-1} == 1 && ! -f ${RUNS[0]}/log_history.json ]]; then
+        stage "RLHF control: GRPO rewarded by the tests"
+        python train/grpo.py $RLHF_COMMON --out ${RUNS[0]}
+        evaluate ${RUNS[0]}
+    fi
     for b in $RLHF_BETAS; do
-        stage "RLHF: GRPO rewarded by rm$RM_SUFFIX, beta=$b"
-        python train/grpo.py $RLHF_COMMON --reward rm:checkpoints/rm$RM_SUFFIX --beta "$b" \
-            --out checkpoints/rlhf_rm$b$RM_SUFFIX
-        evaluate checkpoints/rlhf_rm$b$RM_SUFFIX
+        out=checkpoints/rlhf_${RLHF_TAG}_b$b
+        stage "RLHF: GRPO rewarded by $RLHF_RM, beta=$b"
+        python train/grpo.py $RLHF_COMMON --reward rm:$RLHF_RM --beta "$b" --out $out
+        evaluate $out
+        RUNS+=($out)
     done
-    python scripts/overoptimization.py checkpoints/rlhf_*$RM_SUFFIX --out outputs/overoptimization$RM_SUFFIX.md
+    python scripts/overoptimization.py "${RUNS[@]}" --out outputs/overoptimization_$RLHF_TAG.md
 fi
 
 if run analyze; then

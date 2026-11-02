@@ -27,8 +27,8 @@ for t in 0.6 0.8; do sbatch slurm/eval.sbatch checkpoints/sft_kodcode --chat --s
 # 5. DPO likelihood displacement check: did logps/chosen fall during DPO (both answers pushed down)?
 #    Prints first and last logged value of chosen/rejected log-probs for every DPO run in the logs.
 for f in $(grep -l "=== DPO" logs/*.out); do echo "== $f"; for k in chosen rejected; do grep -o "'logps/$k': '[^']*'" $f | sed -n '1p;$p'; done; done
-# 6. Reward model from Qwen2.5-Coder-7B-Instruct (LoRA) -> outputs/reward_eval_kodcode.md
-EXTRA_MODELS=Qwen/Qwen2.5-Coder-7B-Instruct STAGES="reward" RM_INIT=Qwen/Qwen2.5-Coder-7B-Instruct RM_OUT=checkpoints/rm_kodcode_coder7b RM_ARGS="--lora --batch-size 4 --grad-accum 8" SBATCH_TIMELIMIT=12:00:00 bash slurm/launch.sh
+# 6. DONE (read 2026-11-02): 7B reward model rm_kodcode_coder7b: pairwise acc 0.932, best-of-10 0.603
+#    (of 0.669), corr with length -0.03. Beats the 7B judge (0.884) and rm_kodcode (0.579). NOT in README.
 
 # 7. Multi-GPU SFT (GPUS=2, added 2026-10-29). Check nodes have 2 A100s, then a ~10 min test: MBPP SFT
 #    on 2 GPUs into checkpoints/sft_2gpu (checkpoints/sft untouched). Log should print
@@ -37,6 +37,8 @@ sinfo -p gpu -o "%N %G" | head
 GPUS=2 SFT_NAME=sft_2gpu STAGES="sft" bash slurm/launch.sh
 
 # --- AFTER a good reward model exists ---
-# RLHF over-optimization: GRPO vs the reward model at beta 0 / 0.02 / 0.1 + a tests control
-# (uses checkpoints/rm_kodcode; point it at the better reward model first) -> outputs/overoptimization_kodcode.md
-STAGES="rlhf" SBATCH_TIMELIMIT=12:00:00 bash slurm/launch.sh
+# RLHF over-optimization with the 7B reward model: GRPO at beta 0 / 0.02 / 0.1 + a tests control.
+# a) memory test first (0.5B policy + vLLM + 7B reward model on one 40GB GPU), 5 steps, no control:
+RLHF_RM=checkpoints/rm_kodcode_coder7b RLHF_BETAS=0.02 RLHF_ARGS="--max-steps 5" RLHF_CONTROL=0 STAGES="rlhf" bash slurm/launch.sh
+# b) full run -> outputs/overoptimization_rm_kodcode_coder7b.md
+RLHF_RM=checkpoints/rm_kodcode_coder7b STAGES="rlhf" SBATCH_TIMELIMIT=2-00:00:00 bash slurm/launch.sh
